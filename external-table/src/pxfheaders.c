@@ -19,18 +19,16 @@
 
 #include "pxffilters.h"
 #include "pxfheaders.h"
-#include "commands/defrem.h"
-#if PG_VERSION_NUM >= 120000
 #include "access/external.h"
-#include "extension/gp_exttable_fdw/extaccess.h"
-#include "executor/execExpr.h"
-#else
-#include "access/fileam.h"
-#include "catalog/pg_exttable.h"
-#endif
+#include "commands/defrem.h"
+#if PG_VERSION_NUM >= 90400
 #include "utils/timestamp.h"
+#else
+#include "nodes/makefuncs.h"
+#endif
 #include "nodes/makefuncs.h"
 #include "cdb/cdbvars.h"
+#include "extension/gp_exttable_fdw/extaccess.h"
 
 /* helper function declarations */
 static void add_alignment_size_httpheader(CHURL_HEADERS headers);
@@ -114,15 +112,20 @@ build_http_headers(PxfInputData *input)
 		/* Parse fmtOptString here */
 		if (fmttype_is_text(exttbl->fmtcode) || fmttype_is_csv(exttbl->fmtcode))
 		{
-#if PG_VERSION_NUM >= 120000
-			copyFmtOpts = exttbl->options;
-#else
+#if PG_VERSION_NUM <= 90400
 			copyFmtOpts = parseCopyFormatString(rel, exttbl->fmtopts, exttbl->fmtcode);
+#else
+			copyFmtOpts = exttbl->options;
 #endif
 		}
 
+#if PG_VERSION_NUM <= 90400
 		/* pass external table's encoding to copy's options */
-		copyFmtOpts = appendCopyEncodingOptionToList(copyFmtOpts, exttbl->encoding);
+		copyFmtOpts = appendCopyEncodingOption(copyFmtOpts, exttbl->encoding);
+#else
+        //copyFmtOpts = exttbl->options;
+        copyFmtOpts =  lappend(copyFmtOpts, makeDefElem("encoding", (Node *)makeString((char *)pg_encoding_to_char(exttbl->encoding)), -1));
+#endif
 
 		/* Extract options from the statement node tree */
 		foreach(option, copyFmtOpts)
@@ -272,7 +275,7 @@ add_tuple_desc_httpheader(CHURL_HEADERS headers, Relation rel)
 	/* Iterate attributes */
 	for (i = 0, attrIx = 0; i < tuple->natts; ++i)
 	{
-		FormData_pg_attribute *attribute = TupleDescAttr(tuple, i);
+		FormData_pg_attribute *attribute = &tuple->attrs[i];
 
 		/* Ignore dropped attributes. */
 		if (attribute->attisdropped)
@@ -498,13 +501,19 @@ add_projection_desc_httpheaders(CHURL_HEADERS headers,
 							   Relation rel)
 {
 	int			   i;
-	int			   droppedCount;  // count of dropped attributes
-	int			   headerCount;   // count of created http headers
-	char		   long_number[sizeof(int32) * 8];
-	int			   numSimpleVars; // number of pre-computed simple vars
-	int			   *varNumbers;   // pre-computed array of simple var attrnos
-
-	Bitmapset	   *attrs_used;   // hashset to keep and de-dup collected attrnos
+	int			   dropped_count;
+	int			   number;
+	int			   numTargetList;
+#if PG_VERSION_NUM < 90400
+	int			   numSimpleVars;
+#endif
+	char			long_number[sizeof(int32) * 8];
+	/* FIXME: to get it to compile assign it to NULL */
+	// pi_varNumbers is not available anymore in the postgters code
+	// https://doxygen.postgresql.org/structProjectionInfo.html
+	//int				*varNumbers = projInfo->pi_varNumbers;
+	int				*varNumbers = NULL;
+	Bitmapset		*attrs_used;
 	StringInfoData	formatter;
 	List		   *targetList;   // targetList from the query plan
 	TupleDesc	   tupdesc;
@@ -515,8 +524,23 @@ add_projection_desc_httpheaders(CHURL_HEADERS headers,
 	targetList = getTargetList(projInfo);
 	varNumbers = getVarNumbers(projInfo);
 
-	// STEP 1: collect attribute numbers (attrno) from the targetList, if necessary
-	if (needToIterateTargetList(targetList, varNumbers)) {
+#if PG_VERSION_NUM >= 90400
+	/*
+	 * Non-simpleVars are added to the targetlist
+	 * we use expression_tree_walker to access attrno information
+	 * we do it through a helper function add_attnums_from_targetList
+	 */
+	/* FIXME: commenting this out for compilation success */
+	// pi_targetlist is not available anymore in the postgters code
+	// https://doxygen.postgresql.org/structProjectionInfo.html
+	//if (projInfo->pi_targetlist)
+	if (1)
+	{
+#else
+	numSimpleVars = 0;
+
+	if (!varNumbers)
+	{
 		/*
 		 * we use expression_tree_walker to access attrno information
 		 * we do it through a helper function add_attnums_from_targetList
@@ -524,11 +548,12 @@ add_projection_desc_httpheaders(CHURL_HEADERS headers,
 		List     *l = lappend_int(NIL, 0);
 		ListCell *lc1;
 
-		foreach(lc1, targetList)
+		/* FIXME: commenting this out to make it compile */
+		/*foreach(lc1, projInfo->pi_targetlist)
 		{
-			Node *node = getTargetListEntryExpression(lc1);
-			add_attnums_from_targetList(node, l);
-		}
+			GenericExprState *gstate = (GenericExprState *) lfirst(lc1);
+			add_attnums_from_targetList((Node *) gstate->arg->expr, l);
+		}*/
 
 		foreach(lc1, l)
 		{
@@ -544,8 +569,30 @@ add_projection_desc_httpheaders(CHURL_HEADERS headers,
 		list_free(l);
 	}
 
-	// STEP 2: collect attribute numbers from pre-computed list of varNumbers (if available) of simpleVars
-	numSimpleVars = getNumSimpleVars(projInfo);
+	number = numTargetList +
+#if PG_VERSION_NUM >= 90400
+		// FIXME: Commenting this out for compilation success
+		// pi_numSimpleVars is not available anymore in the postgters 12 code
+		// https://doxygen.postgresql.org/structProjectionInfo.html
+		// projInfo->pi_numSimpleVars +
+#else
+		numSimpleVars +
+#endif
+		list_length(qualsAttributes);
+	if (number == 0)
+		return;
+
+	attrs_used = NULL;
+
+	/* Convert the number of projection columns to a string */
+	pg_ltoa(number, long_number);
+	churl_headers_append(headers, "X-GP-ATTRS-PROJ", long_number);
+
+#if PG_VERSION_NUM >= 90400
+	/* FIXME: commenting out to get compile to work */
+	//for (i = 0; i < projInfo->pi_numSimpleVars; i++)
+	for (i = 0; i < 100; i++)
+#else
 	for (i = 0; varNumbers && i < numSimpleVars; i++)
 	{
 		attrs_used =
@@ -571,7 +618,7 @@ add_projection_desc_httpheaders(CHURL_HEADERS headers,
 	for (i = 1; i <= tupdesc->natts; i++)
 	{
 		/* Ignore dropped attributes. */
-		if (TupleDescAttr(tupdesc, i - 1)->attisdropped)
+		if (tupdesc->attrs[i - 1].attisdropped)
 		{
 			/* keep a counter of the number of dropped attributes */
 			droppedCount++;

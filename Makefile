@@ -82,16 +82,10 @@ it:
 	make -C automation TEST=$(TEST)
 
 install:
-ifneq ($(SKIP_FDW_BUILD_REASON),)
-	@echo "Skipping installing FDW extension because $(SKIP_FDW_BUILD_REASON)"
-	$(eval PXF_MODULES := $(filter-out fdw,$(PXF_MODULES)))
-endif
-	set -e ;\
-	for module in $${PXF_MODULES[@]}; do \
-		echo "===> Installing [$${module}] module <===" ;\
-		make -C $${module} install ;\
-	done ;\
-	echo "===> PXF installation is complete <==="
+	make -C $(SOURCE_EXTENSION_DIR) install
+	make -C external-table install
+	make -C cli/go/src/pxf-cli install
+	make -C server install
 
 install-server:
 	make -C server install-server

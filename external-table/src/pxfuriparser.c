@@ -19,6 +19,8 @@
 
 #include "pxfuriparser.h"
 #include "pxfutils.h"
+#include "pxfbridge.h"
+
 #include "utils/formatting.h"
 
 static const char *PTC_SEP = "://";

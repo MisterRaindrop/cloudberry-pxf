@@ -7,8 +7,9 @@
 -- m/DETAIL/
 -- s/DETAIL/CONTEXT/
 --
--- m/,.*line (.*)/
--- s/,.*line (.*)//g
+--
+-- m/ALTER/
+-- s/ALTER EXTERNAL TABLE/ALTER FOREIGN TABLE/g
 --
 -- end_matchsubs
 

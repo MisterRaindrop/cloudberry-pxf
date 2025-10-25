@@ -190,7 +190,7 @@ jobs:
     # Add Hadoop ecosystem services
     services:
       hadoop-services:
-        image: pxf/hadoop-services:latest
+        image: pxf/singlecluster:3
         ports:
           - 9000:9000   # HDFS
           - 9870:9870   # HDFS Web UI  
@@ -233,11 +233,11 @@ jobs:
 
       - name: Load Docker images
         run: |
-          if [ -f /tmp/docker-images/hadoop-services.tar.gz ]; then
-            echo "Loading hadoop-services image..."
-            docker load < /tmp/docker-images/hadoop-services.tar.gz
+          if [ -f /tmp/docker-images/singlecluster.tar.gz ]; then
+            echo "Loading singlecluster image..."
+            docker load < /tmp/docker-images/singlecluster.tar.gz
           else
-            echo "No cached hadoop-services image found"
+            echo "No cached singlecluster image found"
             exit 1
           fi
 

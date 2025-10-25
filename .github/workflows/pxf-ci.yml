@@ -204,6 +204,14 @@ jobs:
         run: |
           eval "$SETUP_ENV_SCRIPT"
 
+      - name: Restore Docker images from cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-images
+          key: pxf-docker-images-${{ github.sha }}
+          restore-keys: |
+            pxf-docker-images-
+
       - name: Load and start Hadoop services container
         run: |
           # Restore and load Docker images
@@ -215,7 +223,7 @@ jobs:
             echo "No cached singlecluster image found"
             exit 1
           fi
-          
+
           # Start Hadoop services container
           echo "Starting Hadoop services container..."
           docker run -d \
@@ -230,19 +238,11 @@ jobs:
             -p 16000:16000 \
             -p 16010:16010 \
             pxf/singlecluster:3
-          
+
           # Wait for services to be ready
           echo "Waiting for Hadoop services to be ready..."
           timeout 300 bash -c 'until docker exec hadoop-services nc -z localhost 9000; do sleep 10; done'
           echo "Hadoop services are ready!"
-
-      - name: Restore Docker images from cache
-        uses: actions/cache@v4
-        with:
-          path: /tmp/docker-images
-          key: pxf-docker-images-${{ github.sha }}
-          restore-keys: |
-            pxf-docker-images-
 
       - name: Checkout current PXF source (this repository)
         uses: actions/checkout@v4

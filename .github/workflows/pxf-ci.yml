@@ -175,6 +175,31 @@ jobs:
           restore-keys: |
             pxf-docker-images-
 
+  # 2) Load Docker Images to Runner
+  load-docker-images:
+    name: Load Docker Images
+    runs-on: ubuntu-latest
+    needs: build-hadoop-services
+    steps:
+      - name: Restore Docker images from cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-images
+          key: pxf-docker-images-${{ github.sha }}
+          restore-keys: |
+            pxf-docker-images-
+
+      - name: Load Docker images
+        run: |
+          if [ -f /tmp/docker-images/singlecluster.tar.gz ]; then
+            echo "Loading singlecluster image..."
+            docker load < /tmp/docker-images/singlecluster.tar.gz
+            docker images | grep singlecluster
+          else
+            echo "No cached singlecluster image found"
+            exit 1
+          fi
+
   # 3) Build, Install, Start and Test PXF (per your commands)
   pxf-build-install-test:
     name: Build, Install & Test PXF
@@ -206,7 +231,7 @@ jobs:
           --health-timeout 10s
           --health-retries 10
           --health-start-period 120s
-    needs: [setup-cloudberry, build-hadoop-services]
+    needs: [setup-cloudberry, load-docker-images]
     steps:
       - name: Restore Apache Cloudberry installation
         uses: actions/cache@v4
@@ -222,24 +247,6 @@ jobs:
       - name: Setup Apache Cloudberry environment
         run: |
           eval "$SETUP_ENV_SCRIPT"
-
-      - name: Restore Docker images from cache
-        uses: actions/cache@v4
-        with:
-          path: /tmp/docker-images
-          key: pxf-docker-images-${{ github.sha }}
-          restore-keys: |
-            pxf-docker-images-
-
-      - name: Load Docker images
-        run: |
-          if [ -f /tmp/docker-images/singlecluster.tar.gz ]; then
-            echo "Loading singlecluster image..."
-            docker load < /tmp/docker-images/singlecluster.tar.gz
-          else
-            echo "No cached singlecluster image found"
-            exit 1
-          fi
 
       - name: Checkout current PXF source (this repository)
         uses: actions/checkout@v4
@@ -551,7 +558,7 @@ jobs:
   notify-status:
     name: Notify Build Status
     runs-on: ubuntu-latest
-    needs: [build-hadoop-services, pxf-build-install-test]
+    needs: [load-docker-images, pxf-build-install-test]
     if: always()
     steps:
       - name: Summary

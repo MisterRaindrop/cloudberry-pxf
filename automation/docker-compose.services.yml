@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # Hadoop ecosystem services (base singlecluster)
+  hadoop-services:
+    build:
+      context: .
+      dockerfile: docker/services/Dockerfile
+    image: pxf/hadoop-services:latest
+    container_name: hadoop-services
+    hostname: hadoop-services
+    ports:
+      - "9000:9000"   # HDFS
+      - "9870:9870"   # HDFS Web UI
+      - "8088:8088"   # YARN ResourceManager
+      - "8042:8042"   # YARN NodeManager
+      - "2181:2181"   # Zookeeper
+      - "9083:9083"   # Hive Metastore
+      - "10000:10000" # HiveServer2
+      - "16000:16000" # HBase Master
+      - "16010:16010" # HBase Master Web UI
+      - "16020:16020" # HBase RegionServer
+      - "16030:16030" # HBase RegionServer Web UI
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9000"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - pxf-test
+
+  # PXF test
+  pxf-test:
+    image: apache/incubator-cloudberry:cbdb-build-rocky9-latest
+    container_name: pxf-test
+    hostname: pxf-test
+    depends_on:
+      hadoop-services:
+        condition: service_healthy
+    environment:
+      - GPHD_ROOT=/opt/hadoop-services
+      - PXF_HOME=/usr/local/pxf
+      - JAVA_HOME=/usr/lib/jvm/java-11-openjdk
+    volumes:
+      - ../:/workspace/pxf
+    working_dir: /workspace/pxf
+    networks:
+      - pxf-test
+    command: tail -f /dev/null
+
+networks:
+  pxf-test:
+    driver: bridge

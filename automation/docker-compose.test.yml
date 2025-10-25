@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  # Hadoop ecosystem for testing
+  hadoop:
+    image: apache/hadoop:3.3.4
+    hostname: hadoop
+    environment:
+      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+    ports:
+      - "9000:9000"   # HDFS
+      - "8088:8088"   # YARN
+      - "9870:9870"   # HDFS Web UI
+    volumes:
+      - hadoop_data:/opt/hadoop/data
+    command: >
+      bash -c "
+        /opt/hadoop/bin/hdfs namenode -format -force &&
+        /opt/hadoop/sbin/start-dfs.sh &&
+        /opt/hadoop/sbin/start-yarn.sh &&
+        tail -f /dev/null
+      "
+
+  # PXF automation test environment
+  pxf-test:
+    image: apache/incubator-cloudberry:cbdb-build-rocky9-latest
+    hostname: pxf-test
+    depends_on:
+      - hadoop
+    environment:
+      - GPHD_ROOT=/opt/hadoop
+      - PXF_HOME=/usr/local/pxf
+      - JAVA_HOME=/usr/lib/jvm/java-11-openjdk
+    volumes:
+      - ../:/workspace/pxf
+      - pxf_data:/home/gpadmin/pxf-base
+    working_dir: /workspace/pxf
+    command: >
+      bash -c "
+        # Initialize container
+        /tmp/init_system.sh &&
+        # Setup PXF
+        su - gpadmin -c 'cd /workspace/pxf && make install' &&
+        su - gpadmin -c 'pxf prepare && pxf start' &&
+        # Run automation tests
+        su - gpadmin -c 'cd /workspace/pxf/automation && mvn clean test' &&
+        tail -f /dev/null
+      "
+
+volumes:
+  hadoop_data:
+  pxf_data:

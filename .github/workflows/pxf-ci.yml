@@ -330,21 +330,6 @@ jobs:
             pxf start
           "
 
-      - name: "Start PXF"
-        id: start_pxf
-        continue-on-error: true
-        if: always()
-        run: |
-          set -eo pipefail
-          su - gpadmin -c "
-            set -eo pipefail
-            export PXF_HOME=/usr/local/pxf
-            export PXF_BASE=\$HOME/pxf-base
-            export PATH=/usr/local/pxf/bin:\$PATH
-            pxf prepare
-            pxf start
-          "
-
       - name: Configure Hadoop services connection
         run: |
           su - gpadmin -c "

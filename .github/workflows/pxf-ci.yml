@@ -230,9 +230,6 @@ jobs:
 
       - name: Load and start Hadoop services container
         run: |
-          # Set Podman environment variables
-          export PODMAN_IGNORE_CGROUPSV1_WARNING=1
-          
           # Restore and load Podman images
           if [ -f /tmp/docker-images/singlecluster.tar.gz ]; then
             echo "Loading singlecluster image..."
@@ -243,13 +240,11 @@ jobs:
             exit 1
           fi
 
-          # Start Hadoop services container with cgroups workaround
+          # Start Hadoop services container
           echo "Starting Hadoop services container..."
           podman run -d \
             --name hadoop-services \
             --hostname hadoop-services \
-            --cgroups=disabled \
-            --security-opt label=disable \
             -p 9000:9000 \
             -p 9870:9870 \
             -p 8088:8088 \
@@ -257,7 +252,7 @@ jobs:
             -p 9083:9083 \
             -p 16000:16000 \
             -p 16010:16010 \
-            localhost/pxf/singlecluster:3
+            pxf/singlecluster:3
 
           # Wait for services to be ready
           echo "Waiting for Hadoop services to be ready..."

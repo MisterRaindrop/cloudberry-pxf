@@ -193,9 +193,6 @@ jobs:
         --hostname cdw
         --shm-size=2gb
         --ulimit core=-1
-        -v /var/run/docker.sock:/var/run/docker.sock
-        --user root
-        --hostname cdw
         --shm-size=2gb
         --ulimit core=-1
     needs: [setup-cloudberry, build-hadoop-services]

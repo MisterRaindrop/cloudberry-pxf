@@ -151,6 +151,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: setup-cloudberry
     steps:
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+          podman --version
+
       - name: Checkout current PXF source
         uses: actions/checkout@v4
         with:
@@ -160,20 +166,20 @@ jobs:
         working-directory: cloudberry-pxf/automation
         run: |
           echo "Building pxf/singlecluster:3 image..."
-          docker build -f docker/singlecluster/Dockerfile -t pxf/singlecluster:3 .
+          podman build -f docker/singlecluster/Dockerfile -t pxf/singlecluster:3 .
 
       - name: Save images to cache
         run: |
           mkdir -p /tmp/docker-images
-          docker save pxf/singlecluster:3 | gzip > /tmp/docker-images/singlecluster.tar.gz
+          podman save pxf/singlecluster:3 | gzip > /tmp/docker-images/singlecluster.tar.gz
 
-      - name: Cache Docker images
+      - name: Cache Podman images
         uses: actions/cache@v4
         with:
           path: /tmp/docker-images
-          key: pxf-docker-images-${{ github.sha }}
+          key: pxf-podman-images-${{ github.sha }}
           restore-keys: |
-            pxf-docker-images-
+            pxf-podman-images-
 
   # 2) Build, Install, Start and Test PXF (per your commands)
   pxf-build-install-test:
@@ -209,30 +215,26 @@ jobs:
         run: |
           eval "$SETUP_ENV_SCRIPT"
 
-      - name: Install Docker in container
+      - name: Install Podman in container
         run: |
-          dnf install -y docker-ce-cli || dnf install -y docker || {
-            # Fallback: install Docker manually
-            curl -fsSL https://get.docker.com -o get-docker.sh
-            sh get-docker.sh
-          }
-          docker --version
+          dnf install -y podman
+          podman --version
 
-      - name: Restore Docker images from cache
+      - name: Restore Podman images from cache
         uses: actions/cache@v4
         with:
           path: /tmp/docker-images
-          key: pxf-docker-images-${{ github.sha }}
+          key: pxf-podman-images-${{ github.sha }}
           restore-keys: |
-            pxf-docker-images-
+            pxf-podman-images-
 
       - name: Load and start Hadoop services container
         run: |
-          # Restore and load Docker images
+          # Restore and load Podman images
           if [ -f /tmp/docker-images/singlecluster.tar.gz ]; then
             echo "Loading singlecluster image..."
-            docker load < /tmp/docker-images/singlecluster.tar.gz
-            docker images | grep singlecluster
+            podman load < /tmp/docker-images/singlecluster.tar.gz
+            podman images | grep singlecluster
           else
             echo "No cached singlecluster image found"
             exit 1
@@ -240,7 +242,7 @@ jobs:
 
           # Start Hadoop services container
           echo "Starting Hadoop services container..."
-          docker run -d \
+          podman run -d \
             --name hadoop-services \
             --hostname hadoop-services \
             -p 9000:9000 \
@@ -254,7 +256,7 @@ jobs:
 
           # Wait for services to be ready
           echo "Waiting for Hadoop services to be ready..."
-          timeout 300 bash -c 'until docker exec hadoop-services nc -z localhost 9000; do sleep 10; done'
+          timeout 300 bash -c 'until podman exec hadoop-services nc -z localhost 9000; do sleep 10; done'
           echo "Hadoop services are ready!"
 
       - name: Checkout current PXF source (this repository)

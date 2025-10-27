@@ -163,8 +163,9 @@ jobs:
         working-directory: cloudberry-pxf/automation
         run: |
           echo "Building pxf/singlecluster:3 image..."
-          docker build -f docker/singlecluster/Dockerfile -t ghcr.io/${{ github.repository }}/singlecluster:${{ github.run_id }} .
-          docker push ghcr.io/${{ github.repository }}/singlecluster:${{ github.run_id }}
+          REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          docker build -f docker/singlecluster/Dockerfile -t ghcr.io/${REPO_NAME}/singlecluster:${{ github.run_id }} .
+          docker push ghcr.io/${REPO_NAME}/singlecluster:${{ github.run_id }}
 
   # 2) Build, Install, Start and Test PXF (per your commands)
   pxf-build-install-test:
@@ -180,7 +181,7 @@ jobs:
         --ulimit core=-1
     services:
       hadoop-services:
-        image: ghcr.io/${{ github.repository }}/singlecluster:${{ github.run_id }}
+        image: ghcr.io/${{ github.repository_owner }}/cloudberry-pxf/singlecluster:${{ github.run_id }}
         ports:
           - 9000:9000
           - 9870:9870
@@ -531,15 +532,16 @@ jobs:
       - name: Delete singlecluster image
         run: |
           # Delete the image from GHCR
+          REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           curl -X DELETE \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/user/packages/container/$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')/singlecluster/versions" \
+            "https://api.github.com/user/packages/container/${REPO_NAME}/singlecluster/versions" \
             | jq -r '.[] | select(.metadata.container.tags[] | contains("${{ github.run_id }}")) | .id' \
             | xargs -I {} curl -X DELETE \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/user/packages/container/$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')/singlecluster/versions/{}" || true
+              "https://api.github.com/user/packages/container/${REPO_NAME}/singlecluster/versions/{}" || true
 
   notify-status:
     name: Notify Build Status

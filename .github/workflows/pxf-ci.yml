@@ -187,11 +187,6 @@ jobs:
         --hostname cdw
         --shm-size=2gb
         --ulimit core=-1
-        -v /var/run/docker.sock:/var/run/docker.sock
-        --user root
-        --hostname cdw
-        --shm-size=2gb
-        --ulimit core=-1
     needs: [setup-cloudberry, build-hadoop-services]
     steps:
       - name: Restore Apache Cloudberry installation
@@ -208,15 +203,6 @@ jobs:
       - name: Setup Apache Cloudberry environment
         run: |
           eval "$SETUP_ENV_SCRIPT"
-
-      - name: Install Docker in container
-        run: |
-          dnf install -y docker-ce-cli || dnf install -y docker || {
-            # Fallback: install Docker manually
-            curl -fsSL https://get.docker.com -o get-docker.sh
-            sh get-docker.sh
-          }
-          docker --version
 
       - name: Restore Docker images from cache
         uses: actions/cache@v4
@@ -243,6 +229,7 @@ jobs:
           docker run -d \
             --name hadoop-services \
             --hostname hadoop-services \
+            --network container:$HOSTNAME \
             -p 9000:9000 \
             -p 9870:9870 \
             -p 8088:8088 \

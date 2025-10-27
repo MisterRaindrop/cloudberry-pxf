@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -163,9 +164,8 @@ jobs:
         working-directory: cloudberry-pxf/automation
         run: |
           echo "Building pxf/singlecluster:3 image..."
-          REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          docker build -f docker/singlecluster/Dockerfile -t ghcr.io/${REPO_NAME}/singlecluster:${{ github.run_id }} .
-          docker push ghcr.io/${REPO_NAME}/singlecluster:${{ github.run_id }}
+          docker build -f docker/singlecluster/Dockerfile -t ghcr.io/${{ github.repository_owner }}/singlecluster:${{ github.run_id }} .
+          docker push ghcr.io/${{ github.repository_owner }}/singlecluster:${{ github.run_id }}
 
   # 2) Build, Install, Start and Test PXF (per your commands)
   pxf-build-install-test:
@@ -181,7 +181,7 @@ jobs:
         --ulimit core=-1
     services:
       hadoop-services:
-        image: ghcr.io/${{ github.repository_owner }}/cloudberry-pxf/singlecluster:${{ github.run_id }}
+        image: ghcr.io/${{ github.repository_owner }}/singlecluster:${{ github.run_id }}
         ports:
           - 9000:9000
           - 9870:9870

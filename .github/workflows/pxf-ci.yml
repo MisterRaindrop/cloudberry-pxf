@@ -145,7 +145,7 @@ jobs:
 
       - name: Install RPM packaging tools
         run: |
-          dnf install -y rpm maven nmap-ncat java-11-openjdk-devel
+          dnf install -y rpm maven nmap-ncat java-11-openjdk-devel make coreutils findutils
           export JAVA_HOME=/usr/lib/jvm/java-11-openjdk
           export PATH=\$JAVA_HOME/bin:\$PATH
           echo 'export JAVA_HOME=/usr/lib/jvm/java-11-openjdk' >> /home/gpadmin/.bashrc

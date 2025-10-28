@@ -176,6 +176,7 @@ jobs:
         run: |
           set -eo pipefail
           su - gpadmin -c "
+            export PATH=/usr/bin:/bin:/usr/sbin:/sbin:\$PATH
             source /usr/local/cloudberry-db/cloudberry-env.sh
             cd ${{ env.GPADMIN_HOME }}/cloudberry-pxf
 

@@ -145,7 +145,11 @@ jobs:
 
       - name: Install RPM packaging tools
         run: |
-          dnf install -y rpm-build rpm-devel maven
+          dnf install -y rpm maven netcat-openbsd java-11-openjdk-devel
+          export JAVA_HOME=/usr/lib/jvm/java-11-openjdk
+          export PATH=\$JAVA_HOME/bin:\$PATH
+          echo 'export JAVA_HOME=/usr/lib/jvm/java-11-openjdk' >> /home/gpadmin/.bashrc
+          echo 'export PATH=\$JAVA_HOME/bin:\$PATH' >> /home/gpadmin/.bashrc
 
       - name: Build PXF components for packaging
         run: |
@@ -154,12 +158,12 @@ jobs:
             set -eo pipefail
             source /usr/local/cloudberry-db/cloudberry-env.sh
             cd ~/cloudberry-pxf
-            
+
             # Build all components
             make -C cli
             make -C external-table
             make -C server clean build
-            
+
             # Build FDW if supported
             if make -C fdw 2>/dev/null; then
               echo 'FDW built successfully'
@@ -176,10 +180,10 @@ jobs:
             set -eo pipefail
             source /usr/local/cloudberry-db/cloudberry-env.sh
             cd ~/cloudberry-pxf
-            
+
             # Create RPM package
             make rpm
-            
+
             # Find the created RPM file
             RPM_FILE=\$(find build/rpmbuild/RPMS -name '*.rpm' | head -1)
             if [ -n \"\$RPM_FILE\" ]; then
@@ -198,10 +202,10 @@ jobs:
           su - gpadmin -c "
             set -eo pipefail
             cd ~/cloudberry-pxf
-            
+
             # Create RPM tarball with install scripts
             make rpm-tar
-            
+
             # Find the created tarball
             TAR_FILE=\$(find build/distrpm/ -name '*.tar.gz' | head -1)
             if [ -n \"\$TAR_FILE\" ]; then

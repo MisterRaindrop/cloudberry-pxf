@@ -156,15 +156,24 @@ jobs:
         with:
           path: cloudberry-pxf
 
-      - name: Login to GitHub Container Registry
-        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Build and push singlecluster image
+      - name: Build singlecluster image
         working-directory: cloudberry-pxf/automation
         run: |
           echo "Building pxf/singlecluster:3 image..."
-          docker build -f docker/singlecluster/Dockerfile -t ghcr.io/${{ github.repository }}/singlecluster:${{ github.run_id }} .
-          docker push ghcr.io/${{ github.repository }}/singlecluster:${{ github.run_id }}
+          docker build -f docker/singlecluster/Dockerfile -t pxf/singlecluster:3 .
+
+      - name: Save images to cache
+        run: |
+          mkdir -p /tmp/docker-images
+          docker save pxf/singlecluster:3 | gzip > /tmp/docker-images/singlecluster.tar.gz
+
+      - name: Cache Docker images
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-images
+          key: pxf-docker-images-${{ github.sha }}
+          restore-keys: |
+            pxf-docker-images-
 
   # 2) Build, Install, Start and Test PXF (per your commands)
   pxf-build-install-test:
@@ -178,17 +187,6 @@ jobs:
         --hostname cdw
         --shm-size=2gb
         --ulimit core=-1
-    services:
-      hadoop-services:
-        image: ghcr.io/${{ github.repository }}/singlecluster:${{ github.run_id }}
-        ports:
-          - 9000:9000
-          - 9870:9870
-          - 8088:8088
-          - 2181:2181
-          - 9083:9083
-          - 16000:16000
-          - 16010:16010
     needs: [setup-cloudberry, build-hadoop-services]
     steps:
       - name: Restore Apache Cloudberry installation
@@ -206,10 +204,44 @@ jobs:
         run: |
           eval "$SETUP_ENV_SCRIPT"
 
-      - name: Wait for Hadoop services to be ready
+      - name: Restore Docker images from cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-images
+          key: pxf-docker-images-${{ github.sha }}
+          restore-keys: |
+            pxf-docker-images-
+
+      - name: Load and start Hadoop services container
         run: |
+          # Restore and load Docker images
+          if [ -f /tmp/docker-images/singlecluster.tar.gz ]; then
+            echo "Loading singlecluster image..."
+            docker load < /tmp/docker-images/singlecluster.tar.gz
+            docker images | grep singlecluster
+          else
+            echo "No cached singlecluster image found"
+            exit 1
+          fi
+
+          # Start Hadoop services container
+          echo "Starting Hadoop services container..."
+          docker run -d \
+            --name hadoop-services \
+            --hostname hadoop-services \
+            --network container:$HOSTNAME \
+            -p 9000:9000 \
+            -p 9870:9870 \
+            -p 8088:8088 \
+            -p 2181:2181 \
+            -p 9083:9083 \
+            -p 16000:16000 \
+            -p 16010:16010 \
+            pxf/singlecluster:3
+
+          # Wait for services to be ready
           echo "Waiting for Hadoop services to be ready..."
-          timeout 300 bash -c 'until nc -z hadoop-services 9000; do sleep 5; done'
+          timeout 300 bash -c 'until docker exec hadoop-services nc -z localhost 9000; do sleep 10; done'
           echo "Hadoop services are ready!"
 
       - name: Checkout current PXF source (this repository)
@@ -519,32 +551,10 @@ jobs:
             exit 1
           fi
 
-  cleanup-images:
-    name: Cleanup Docker Images
-    runs-on: ubuntu-latest
-    needs: [pxf-build-install-test]
-    if: always()
-    steps:
-      - name: Login to GitHub Container Registry
-        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Delete singlecluster image
-        run: |
-          # Delete the image from GHCR
-          curl -X DELETE \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/user/packages/container/$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')/singlecluster/versions" \
-            | jq -r '.[] | select(.metadata.container.tags[] | contains("${{ github.run_id }}")) | .id' \
-            | xargs -I {} curl -X DELETE \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/user/packages/container/$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')/singlecluster/versions/{}" || true
-
   notify-status:
     name: Notify Build Status
     runs-on: ubuntu-latest
-    needs: [pxf-build-install-test, cleanup-images]
+    needs: [pxf-build-install-test]
     if: always()
     steps:
       - name: Summary

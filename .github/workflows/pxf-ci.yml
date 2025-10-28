@@ -155,9 +155,8 @@ jobs:
         run: |
           set -eo pipefail
           su - gpadmin -c "
-            set -eo pipefail
             source /usr/local/cloudberry-db/cloudberry-env.sh
-            cd ~/cloudberry-pxf
+            cd ${{ env.GPADMIN_HOME }}/cloudberry-pxf
 
             # Build all components
             make -C cli
@@ -177,9 +176,8 @@ jobs:
         run: |
           set -eo pipefail
           su - gpadmin -c "
-            set -eo pipefail
             source /usr/local/cloudberry-db/cloudberry-env.sh
-            cd ~/cloudberry-pxf
+            cd ${{ env.GPADMIN_HOME }}/cloudberry-pxf
 
             # Create RPM package
             make rpm
@@ -200,8 +198,7 @@ jobs:
         run: |
           set -eo pipefail
           su - gpadmin -c "
-            set -eo pipefail
-            cd ~/cloudberry-pxf
+            cd ${{ env.GPADMIN_HOME }}/cloudberry-pxf
 
             # Create RPM tarball with install scripts
             make rpm-tar

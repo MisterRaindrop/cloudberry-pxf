@@ -315,22 +315,22 @@ jobs:
 
       - name: Initialize and start PXF service
         run: |
-        docker exec cloudberry-pxf su - gpadmin -c "
-          set -eo pipefail
-          su - gpadmin -c "
+          docker exec cloudberry-pxf su - gpadmin -c "
             set -eo pipefail
-            export PXF_HOME=/usr/local/pxf
-            export PXF_BASE=\$HOME/pxf-base
-            export PATH=/usr/local/pxf/bin:\$PATH
+            su - gpadmin -c "
+              set -eo pipefail
+              export PXF_HOME=/usr/local/pxf
+              export PXF_BASE=\$HOME/pxf-base
+              export PATH=/usr/local/pxf/bin:\$PATH
 
-            # Initialize PXF
-            pxf prepare
-            pxf start
+              # Initialize PXF
+              pxf prepare
+              pxf start
 
-            # Verify PXF is running
-            pxf status
+              # Verify PXF is running
+              pxf status
+            "
           "
-        "
 
       - name: Restore Docker images from cache
         uses: actions/cache@v4

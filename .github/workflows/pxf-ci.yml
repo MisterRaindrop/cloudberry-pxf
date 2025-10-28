@@ -475,10 +475,18 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Evaluate PXF RPM package installation and testing results
+      - name: Evaluate module build/test results
         if: always()
         env:
-          PXF_INSTALLED: ${{ env.PXF_INSTALLED_FROM_RPM }}
+          BUILD_CLI: ${{ steps.build_pxf_cli.outcome }}
+          BUILD_FDW: ${{ steps.build_pxf_fdw.outcome }}
+          BUILD_EXTERNAL: ${{ steps.build_pxf_external.outcome }}
+          BUILD_SERVER: ${{ steps.build_pxf_server.outcome }}
+          TEST_CLI: ${{ steps.test_pxf_cli.outcome }}
+          TEST_FDW: ${{ steps.test_pxf_fdw.outcome }}
+          TEST_EXTERNAL: ${{ steps.test_pxf_external.outcome }}
+          TEST_SERVER: ${{ steps.test_pxf_server.outcome }}
+          INSTALL_PXF: ${{ steps.install_pxf.outcome }}
           START_PXF: ${{ steps.start_pxf.outcome }}
           AUTO_TESTS: ${{ steps.automation_tests.outcome }}
         run: |
@@ -490,30 +498,36 @@ jobs:
               failure) echo "❌";;
               cancelled) echo "🛑";;
               skipped|"") echo "⏭️";;
-              true) echo "✅";;
-              false) echo "❌";;
               *) echo "$1";;
             esac
           }
 
-          INST_ICON=$(status_icon "${PXF_INSTALLED}")
-          ST_ICON=$(status_icon "${START_PXF}")
-          AT_ICON=$(status_icon "${AUTO_TESTS}")
+          BCLI_ICON=$(status_icon "${BUILD_CLI}")
+          BFDW_ICON=$(status_icon "${BUILD_FDW}")
+          BEXT_ICON=$(status_icon "${BUILD_EXTERNAL}")
+          BSRV_ICON=$(status_icon "${BUILD_SERVER}")
+          TCLI_ICON=$(status_icon "${TEST_CLI}")
+          TFDW_ICON=$(status_icon "${TEST_FDW}")
+          TEXT_ICON=$(status_icon "${TEST_EXTERNAL}")
+          TSRV_ICON=$(status_icon "${TEST_SERVER}")
 
           {
-            echo "## PXF RPM Package Test Results"
+            echo "## PXF Module Build/Test Results"
             echo ""
+            echo "| Module | Build | Test |"
+            echo "|-------:|:-----:|:----:|"
+            echo "| CLI | ${BCLI_ICON} (${BUILD_CLI:-skipped}) | ${TCLI_ICON} (${TEST_CLI:-skipped}) |"
+            echo "| FDW | ${BFDW_ICON} (${BUILD_FDW:-skipped}) | ${TFDW_ICON} (${TEST_FDW:-skipped}) |"
+            echo "| External-Table | ${BEXT_ICON} (${BUILD_EXTERNAL:-skipped}) | ${TEXT_ICON} (${TEST_EXTERNAL:-skipped}) |"
+            echo "| Server | ${BSRV_ICON} (${BUILD_SERVER:-skipped}) | ${TSRV_ICON} (${TEST_SERVER:-skipped}) |"
+            echo ""
+            echo "### Install/Start/Automation"
+            IN_ICON=$(status_icon "${INSTALL_PXF}") ; ST_ICON=$(status_icon "${START_PXF}") ; AT_ICON=$(status_icon "${AUTO_TESTS}")
             echo "| Step | Status |"
             echo "|-----:|:------:|"
-            echo "| RPM Package Installation | ${INST_ICON} (${PXF_INSTALLED:-unknown}) |"
-            echo "| Start PXF Service | ${ST_ICON} (${START_PXF:-skipped}) |"
+            echo "| Install PXF | ${IN_ICON} (${INSTALL_PXF:-skipped}) |"
+            echo "| Start PXF | ${ST_ICON} (${START_PXF:-skipped}) |"
             echo "| Automation Tests | ${AT_ICON} (${AUTO_TESTS:-skipped}) |"
-            echo ""
-            echo "### Package Information"
-            echo "- PXF installed from RPM package: ${PXF_INSTALLED:-unknown}"
-            echo "- Installation path: \`/usr/local/pxf-cbdb*\`"
-            echo "- Service logs: \`~/pxf-base/log\`"
-            echo "- Uploaded artifact bundle: 'pxf-build-install-test-artifacts'"
             echo ""
             echo "### Logs and Reports"
             echo "- Server Gradle test reports: \`~/cloudberry-pxf/server/build/reports/tests/test\`"
@@ -523,15 +537,14 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail=0
-          # Check if DEB package installation failed
-          if [ "${PXF_INSTALLED}" = "false" ]; then fail=1; fi
-          # Check if PXF service start failed
-          if [ "${START_PXF}" = "failure" ]; then fail=1; fi
-          # Check if automation tests failed
-          if [ "${AUTO_TESTS}" = "failure" ]; then fail=1; fi
+          for v in "${BUILD_CLI}" "${BUILD_FDW}" "${BUILD_EXTERNAL}" "${BUILD_SERVER}" \
+                   "${TEST_CLI}" "${TEST_FDW}" "${TEST_EXTERNAL}" "${TEST_SERVER}" \
+                   "${INSTALL_PXF}" "${START_PXF}" "${AUTO_TESTS}"; do
+            if [ "$v" = "failure" ]; then fail=1; fi
+          done
 
           if [ "$fail" -ne 0 ]; then
-            echo "One or more critical steps failed. Marking job as failed."
+            echo "One or more modules failed. Marking job as failed."
             exit 1
           fi
 
@@ -546,4 +559,3 @@ jobs:
           echo "PXF CI Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- PXF Build & Test: ${{ needs.pxf-build-install-test.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "- RPM Package: Built in setup-cloudberry job" >> $GITHUB_STEP_SUMMARY

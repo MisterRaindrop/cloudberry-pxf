@@ -94,8 +94,8 @@ jobs:
       - name: Cloudberry Environment Initialization
         run: |
           docker exec cloudberry-pxf bash -c "
-            if ! su - gpadmin -c "/tmp/init_system.sh"; then
-              echo "::error::Container initialization failed"
+            if ! su - gpadmin -c '/tmp/init_system.sh'; then
+              echo 'Container initialization failed'
               exit 1
             fi
             mkdir -p build-logs/details
@@ -123,13 +123,13 @@ jobs:
         run: |
           docker exec cloudberry-pxf bash -c "
             set -eo pipefail
-            mkdir -p "${SRC_DIR}/${LOGS_DIR}" "${SRC_DIR}/${LOGS_DIR}/details"
-            chown -R gpadmin:gpadmin "${SRC_DIR}"
-            chmod -R 755 "${SRC_DIR}"
-            chmod 777 "${SRC_DIR}/${LOGS_DIR}"
-            chmod +x "${SRC_DIR}"/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh
-            if ! time su - gpadmin -c "cd ${SRC_DIR} && SRC_DIR=${SRC_DIR} ENABLE_DEBUG=${{ env.ENABLE_DEBUG }} ${SRC_DIR}/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh"; then
-              echo "::error::Configure script failed"
+            mkdir -p \"\${SRC_DIR}/\${LOGS_DIR}\" \"\${SRC_DIR}/\${LOGS_DIR}/details\"
+            chown -R gpadmin:gpadmin \"\${SRC_DIR}\"
+            chmod -R 755 \"\${SRC_DIR}\"
+            chmod 777 \"\${SRC_DIR}/\${LOGS_DIR}\"
+            chmod +x \"\${SRC_DIR}\"/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh
+            if ! time su - gpadmin -c 'cd \${SRC_DIR} && SRC_DIR=\${SRC_DIR} ENABLE_DEBUG=${{ env.ENABLE_DEBUG }} \${SRC_DIR}/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh'; then
+              echo 'Configure script failed'
               exit 1
             fi
           "
@@ -139,9 +139,9 @@ jobs:
         run: |
           docker exec cloudberry-pxf bash -c "
             set -eo pipefail
-            chmod +x "${SRC_DIR}"/devops/build/automation/cloudberry/scripts/build-cloudberry.sh
-            if ! time su - gpadmin -c "cd ${SRC_DIR} && SRC_DIR=${SRC_DIR} ${SRC_DIR}/devops/build/automation/cloudberry/scripts/build-cloudberry.sh"; then
-              echo "::error::Build script failed"
+            chmod +x \"\${SRC_DIR}\"/devops/build/automation/cloudberry/scripts/build-cloudberry.sh
+            if ! time su - gpadmin -c 'cd \${SRC_DIR} && SRC_DIR=\${SRC_DIR} \${SRC_DIR}/devops/build/automation/cloudberry/scripts/build-cloudberry.sh'; then
+              echo 'Build script failed'
               exit 1
             fi
           "
@@ -152,24 +152,24 @@ jobs:
         run: |
           docker exec cloudberry-pxf bash -c "
             set -eo pipefail
-            su - gpadmin -c "
+            su - gpadmin -c '
               set -eo pipefail
-              cd ${SRC_DIR}
-              export SRC_DIR=${SRC_DIR}
-              export NUM_PRIMARY_MIRROR_PAIRS=${NUM_PRIMARY_MIRROR_PAIRS}
+              cd \${SRC_DIR}
+              export SRC_DIR=\${SRC_DIR}
+              export NUM_PRIMARY_MIRROR_PAIRS=\${NUM_PRIMARY_MIRROR_PAIRS}
               chmod +x devops/build/automation/cloudberry/scripts/create-cloudberry-demo-cluster.sh
               ./devops/build/automation/cloudberry/scripts/create-cloudberry-demo-cluster.sh
-            "
+            '
           "
       - name: Verify Cloudberry cluster
         run: |
           docker exec cloudberry-pxf bash -c "
             set -eo pipefail
-            su - gpadmin -c "
+            su - gpadmin -c '
               source /usr/local/cloudberry-db/cloudberry-env.sh
-              source ${GITHUB_WORKSPACE}/cloudberry/gpAux/gpdemo/gpdemo-env.sh
+              source \${GITHUB_WORKSPACE}/cloudberry/gpAux/gpdemo/gpdemo-env.sh
               gpstate -s
-              psql -d postgres -c 'SELECT version();'
-              psql -d postgres -c 'SELECT * FROM gp_segment_configuration;'
-            "
+              psql -d postgres -c \"SELECT version();\"
+              psql -d postgres -c \"SELECT * FROM gp_segment_configuration;\"
+            '
           "

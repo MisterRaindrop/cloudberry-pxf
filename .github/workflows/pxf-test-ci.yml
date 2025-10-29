@@ -101,11 +101,9 @@ jobs:
 
             # Create necessary directories and set permissions
             mkdir -p build-logs/details
-            chown -R gpadmin:gpadmin .
-            chmod -R 755 .
+            chown -R gpadmin:gpadmin . > /dev/null 2>&1
+            chmod -R 755 . > /dev/null 2>&1
             chmod 777 build-logs
-          "
-          "
           "
       - name: Checkout Apache Cloudberry source
         env:

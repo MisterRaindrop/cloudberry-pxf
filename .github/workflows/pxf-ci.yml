@@ -153,71 +153,46 @@ jobs:
           echo 'export JAVA_HOME=/usr/lib/jvm/java-11-openjdk' >> /home/gpadmin/.bashrc
           echo 'export PATH=\$JAVA_HOME/bin:\$PATH' >> /home/gpadmin/.bashrc
 
-      - name: Build PXF components for packaging
+      - name: Build Cloudberry for packaging
         run: |
           set -eo pipefail
           su - gpadmin -c "
             source /usr/local/cloudberry-db/cloudberry-env.sh
-            cd ${{ env.GPADMIN_HOME }}/cloudberry-pxf
+            cd ${{ github.workspace }}/cloudberry
 
-            # Build all components
-            make -C cli
-            make -C external-table
-            make -C server clean build
-
-            # Build FDW if supported
-            if make -C fdw 2>/dev/null; then
-              echo 'FDW built successfully'
-            else
-              echo 'FDW build skipped or failed'
-            fi
+            # Build Cloudberry
+            make -j$(nproc)
           "
 
-      - name: Create RPM package
+      - name: Create Cloudberry RPM package
         id: create_rpm
         run: |
           set -eo pipefail
           su - gpadmin -c "
             export PATH=/usr/bin:/bin:/usr/sbin:/sbin:\$PATH
             source /usr/local/cloudberry-db/cloudberry-env.sh
-            cd ${{ env.GPADMIN_HOME }}/cloudberry-pxf
+            cd ${{ github.workspace }}/cloudberry
 
-            # Create RPM package
+            # Create Cloudberry RPM package
             make rpm
 
             # Find the created RPM file
             RPM_FILE=\$(find build/rpmbuild/RPMS -name '*.rpm' | head -1)
             if [ -n \"\$RPM_FILE\" ]; then
               echo \"rpm_file=\$RPM_FILE\" >> \$GITHUB_OUTPUT
-              echo \"RPM package created: \$RPM_FILE\"
+              echo \"Cloudberry RPM package created: \$RPM_FILE\"
               ls -la \$RPM_FILE
             else
-              echo \"No RPM file found\"
+              echo \"No Cloudberry RPM file found\"
               exit 1
             fi
           "
 
-      - name: Create RPM tarball for distribution
+      - name: Save Cloudberry RPM package for next job
         run: |
-          set -eo pipefail
-          su - gpadmin -c "
-            cd ${{ env.GPADMIN_HOME }}/cloudberry-pxf
-
-            # Create RPM tarball with install scripts
-            make rpm-tar
-
-            # Find the created tarball
-            TAR_FILE=\$(find build/distrpm/ -name '*.tar.gz' | head -1)
-            if [ -n \"\$TAR_FILE\" ]; then
-              echo \"Tarball created: \$TAR_FILE\"
-              ls -la \$TAR_FILE
-            fi
-          "
-
-      - name: Save PXF RPM package for next job
-        run: |
-          mkdir -p /tmp/pxf-rpm-artifacts
-          cp ${{ env.GPADMIN_HOME }}/cloudberry-pxf/build/rpmbuild/RPMS/*.rpm /tmp/pxf-rpm-artifacts/ || true
+          mkdir -p /tmp/cloudberry-rpm-artifacts
+          cp ${{ github.workspace }}/cloudberry/build/rpmbuild/RPMS/*.rpm /tmp/cloudberry-rpm-artifacts/ || true
+          ls -la /tmp/cloudberry-rpm-artifacts/
           cp ${{ env.GPADMIN_HOME }}/cloudberry-pxf/build/distrpm/*.tar.gz /tmp/pxf-rpm-artifacts/ || true
           ls -la /tmp/pxf-rpm-artifacts/
 
@@ -276,64 +251,91 @@ jobs:
         run: |
           docker exec cloudberry-pxf dnf install -y --allowerasing rpm maven nmap-ncat java-11-openjdk-devel make coreutils findutils
 
-      - name: Restore PXF RPM artifacts
+      - name: Restore Cloudberry RPM artifacts
         run: |
-            mkdir -p /tmp/pxf-rpm
-            if [ -d "/tmp/pxf-rpm-artifacts" ]; then
-              cp /tmp/pxf-rpm-artifacts/* /tmp/pxf-rpm/
-              ls -la /tmp/pxf-rpm/
-            else
-              echo "No PXF RPM artifacts found"
-              exit 1
-            fi
-      - name: Download and Install PXF RPM package
+          mkdir -p /tmp/cloudberry-rpm
+          if [ -d "/tmp/cloudberry-rpm-artifacts" ]; then
+            cp /tmp/cloudberry-rpm-artifacts/* /tmp/cloudberry-rpm/
+            ls -la /tmp/cloudberry-rpm/
+          else
+            echo "No Cloudberry RPM artifacts found"
+            exit 1
+          fi
+
+      - name: Install Cloudberry from RPM package
         run: |
-          docker cp /tmp/pxf-rpm/ cloudberry-pxf:/tmp/pxf-rpm/
+          docker cp /tmp/cloudberry-rpm/ cloudberry-pxf:/tmp/cloudberry-rpm/
           docker exec cloudberry-pxf bash -c "
             set -eo pipefail
-            RPM_FILE=\$(find /tmp/pxf-rpm/ -name '*.rpm' | head -1)
+            
+            # Find and install the Cloudberry RPM package
+            RPM_FILE=\$(find /tmp/cloudberry-rpm/ -name '*.rpm' | head -1)
             if [ -n \"\$RPM_FILE\" ]; then
-              echo \"Installing PXF from RPM package: \$RPM_FILE\"
+              echo \"Installing Cloudberry from RPM package: \$RPM_FILE\"
               rpm -ivh \"\$RPM_FILE\"
-              chown -R gpadmin:gpadmin /usr/local/pxf-cbdb*
-              ln -sf /usr/local/pxf-cbdb* /usr/local/pxf
-              echo \"PXF installed successfully from RPM package\"
+              
+              # Set ownership to gpadmin
+              chown -R gpadmin:gpadmin /usr/local/cloudberry-db*
+              
+              echo \"Cloudberry installed successfully from RPM package\"
             else
-              echo \"No RPM package found\"
+              echo \"No Cloudberry RPM package found\"
               exit 1
             fi
           "
 
-
-      - name: Setup Cloudberry environment for testing
+      - name: Checkout PXF source code in container
         run: |
-          # Initialize container environment
           docker exec cloudberry-pxf bash -c "
-            if ! su - gpadmin -c "/tmp/init_system.sh"; then
-              echo "::error::Container initialization failed"
-              exit 1
-            fi
-            eval "$SETUP_ENV_SCRIPT"
-            chown -R gpadmin:gpadmin /usr/local/pxf* || true
+            su - gpadmin -c '
+              if [ ! -d cloudberry-pxf ]; then
+                git clone ${{ github.server_url }}/${{ github.repository }}.git cloudberry-pxf
+                cd cloudberry-pxf
+                git checkout ${{ github.sha }}
+              fi
+            '
           "
-
-      - name: Initialize and start PXF service
+      - name: Build and Install PXF in container
         run: |
-          docker exec cloudberry-pxf su - gpadmin -c "
-            set -eo pipefail
-            su - gpadmin -c "
+          docker exec cloudberry-pxf bash -c "
+            # Install additional build dependencies
+            dnf install -y --allowerasing golang gcc gcc-c++ curl-devel postgresql-devel
+            
+            su - gpadmin -c '
               set -eo pipefail
+              export GPHOME=/usr/local/cloudberry-db
+              export PATH=\$GPHOME/bin:\$PATH
+              source \$GPHOME/cloudberry-env.sh
+              
+              cd cloudberry-pxf
+              
+              # Build all PXF components
+              make all
+              
+              # Install PXF
+              make install
+              
+              # Set up PXF environment
               export PXF_HOME=/usr/local/pxf
               export PXF_BASE=\$HOME/pxf-base
-              export PATH=/usr/local/pxf/bin:\$PATH
-
+              export PATH=\$PXF_HOME/bin:\$PATH
+              
               # Initialize PXF
               pxf prepare
               pxf start
-
+              
               # Verify PXF is running
               pxf status
-            "
+            '
+          "
+
+      - name: Setup Cloudberry environment for testing
+        run: |
+          docker exec cloudberry-pxf bash -c "
+            if ! su - gpadmin -c '/tmp/init_system.sh'; then
+              echo 'Container initialization failed'
+              exit 1
+            fi
           "
 
       - name: Restore Docker images from cache

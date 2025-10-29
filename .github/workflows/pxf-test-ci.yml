@@ -78,7 +78,8 @@ jobs:
     needs: [build-hadoop-services]
     steps:
       - name: Create shared network
-        run: docker network create pxf-test-network
+        run: |
+          docker network create pxf-test-network
       - name: Deploy Cloudberry
         run: |
           docker run -it \
@@ -117,60 +118,60 @@ jobs:
             chmod -R 755 cloudberry
           "
       - name: Configure Apache Cloudberry
-      env:
-        SRC_DIR: ${{ github.workspace }}/cloudberry
-        BUILD_DESTINATION: /usr/local/cloudberry-db
-        LOGS_DIR: build-logs
-      run: |
-        docker exec cloudberry-pxf bash -c "
-          set -eo pipefail
-          mkdir -p "${SRC_DIR}/${LOGS_DIR}" "${SRC_DIR}/${LOGS_DIR}/details"
-          chown -R gpadmin:gpadmin "${SRC_DIR}"
-          chmod -R 755 "${SRC_DIR}"
-          chmod 777 "${SRC_DIR}/${LOGS_DIR}"
-          chmod +x "${SRC_DIR}"/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh
-          if ! time su - gpadmin -c "cd ${SRC_DIR} && SRC_DIR=${SRC_DIR} ENABLE_DEBUG=${{ env.ENABLE_DEBUG }} ${SRC_DIR}/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh"; then
-            echo "::error::Configure script failed"
-            exit 1
-          fi
-        "
-      - name: Build Apache Cloudberry
-      env:
-        SRC_DIR: ${{ github.workspace }}/cloudberry
-      run: |
-        docker exec cloudberry-pxf bash -c "
-          set -eo pipefail
-          chmod +x "${SRC_DIR}"/devops/build/automation/cloudberry/scripts/build-cloudberry.sh
-          if ! time su - gpadmin -c "cd ${SRC_DIR} && SRC_DIR=${SRC_DIR} ${SRC_DIR}/devops/build/automation/cloudberry/scripts/build-cloudberry.sh"; then
-            echo "::error::Build script failed"
-            exit 1
-          fi
-        "
-      - name: Create Cloudberry demo cluster
-      env:
-        SRC_DIR: ${{ github.workspace }}/cloudberry
-        NUM_PRIMARY_MIRROR_PAIRS: 1
-      run: |
-        docker exec cloudberry-pxf bash -c "
-          set -eo pipefail
-          su - gpadmin -c "
+        env:
+          SRC_DIR: ${{ github.workspace }}/cloudberry
+          BUILD_DESTINATION: /usr/local/cloudberry-db
+          LOGS_DIR: build-logs
+        run: |
+          docker exec cloudberry-pxf bash -c "
             set -eo pipefail
-            cd ${SRC_DIR}
-            export SRC_DIR=${SRC_DIR}
-            export NUM_PRIMARY_MIRROR_PAIRS=${NUM_PRIMARY_MIRROR_PAIRS}
-            chmod +x devops/build/automation/cloudberry/scripts/create-cloudberry-demo-cluster.sh
-            ./devops/build/automation/cloudberry/scripts/create-cloudberry-demo-cluster.sh
+            mkdir -p "${SRC_DIR}/${LOGS_DIR}" "${SRC_DIR}/${LOGS_DIR}/details"
+            chown -R gpadmin:gpadmin "${SRC_DIR}"
+            chmod -R 755 "${SRC_DIR}"
+            chmod 777 "${SRC_DIR}/${LOGS_DIR}"
+            chmod +x "${SRC_DIR}"/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh
+            if ! time su - gpadmin -c "cd ${SRC_DIR} && SRC_DIR=${SRC_DIR} ENABLE_DEBUG=${{ env.ENABLE_DEBUG }} ${SRC_DIR}/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh"; then
+              echo "::error::Configure script failed"
+              exit 1
+            fi
           "
-        "
+      - name: Build Apache Cloudberry
+        env:
+          SRC_DIR: ${{ github.workspace }}/cloudberry
+        run: |
+          docker exec cloudberry-pxf bash -c "
+            set -eo pipefail
+            chmod +x "${SRC_DIR}"/devops/build/automation/cloudberry/scripts/build-cloudberry.sh
+            if ! time su - gpadmin -c "cd ${SRC_DIR} && SRC_DIR=${SRC_DIR} ${SRC_DIR}/devops/build/automation/cloudberry/scripts/build-cloudberry.sh"; then
+              echo "::error::Build script failed"
+              exit 1
+            fi
+          "
+      - name: Create Cloudberry demo cluster
+        env:
+          SRC_DIR: ${{ github.workspace }}/cloudberry
+          NUM_PRIMARY_MIRROR_PAIRS: 1
+        run: |
+          docker exec cloudberry-pxf bash -c "
+            set -eo pipefail
+            su - gpadmin -c "
+              set -eo pipefail
+              cd ${SRC_DIR}
+              export SRC_DIR=${SRC_DIR}
+              export NUM_PRIMARY_MIRROR_PAIRS=${NUM_PRIMARY_MIRROR_PAIRS}
+              chmod +x devops/build/automation/cloudberry/scripts/create-cloudberry-demo-cluster.sh
+              ./devops/build/automation/cloudberry/scripts/create-cloudberry-demo-cluster.sh
+            "
+          "
       - name: Verify Cloudberry cluster
-      run: |
-        docker exec cloudberry-pxf bash -c "
-          set -eo pipefail
-          su - gpadmin -c "
-            source /usr/local/cloudberry-db/cloudberry-env.sh
-            source ${GITHUB_WORKSPACE}/cloudberry/gpAux/gpdemo/gpdemo-env.sh
-            gpstate -s
-            psql -d postgres -c 'SELECT version();'
-            psql -d postgres -c 'SELECT * FROM gp_segment_configuration;'
+        run: |
+          docker exec cloudberry-pxf bash -c "
+            set -eo pipefail
+            su - gpadmin -c "
+              source /usr/local/cloudberry-db/cloudberry-env.sh
+              source ${GITHUB_WORKSPACE}/cloudberry/gpAux/gpdemo/gpdemo-env.sh
+              gpstate -s
+              psql -d postgres -c 'SELECT version();'
+              psql -d postgres -c 'SELECT * FROM gp_segment_configuration;'
+            "
           "
-        "

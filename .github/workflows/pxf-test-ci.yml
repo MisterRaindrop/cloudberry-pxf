@@ -81,7 +81,7 @@ jobs:
           docker network create pxf-test-network
       - name: Deploy Cloudberry
         run: |
-          docker run -it \
+          docker run -d \
               --privileged \
               --user root \
               --hostname cdw \
@@ -90,7 +90,6 @@ jobs:
               --name cloudberry-pxf \
               --network pxf-test-network \
               apache/incubator-cloudberry:cbdb-build-rocky9-latest \
-              /bin/bash
               tail -f /dev/null
       - name: Cloudberry Environment Initialization
         run: |

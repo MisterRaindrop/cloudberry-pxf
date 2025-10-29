@@ -46,7 +46,6 @@ jobs:
   build-hadoop-services:
     name: Build Hadoop Services Image
     runs-on: ubuntu-latest
-    needs: setup-cloudberry
     steps:
       - name: Checkout current PXF source
         uses: actions/checkout@v4

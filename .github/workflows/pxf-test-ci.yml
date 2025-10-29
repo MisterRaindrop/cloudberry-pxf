@@ -94,6 +94,9 @@ jobs:
       - name: Cloudberry Environment Initialization
         run: |
           docker exec cloudberry-pxf bash -c "
+            # Fix PAM configuration for sudo
+            echo 'gpadmin ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+            
             if ! su - gpadmin -c '/tmp/init_system.sh'; then
               echo 'Container initialization failed'
               exit 1

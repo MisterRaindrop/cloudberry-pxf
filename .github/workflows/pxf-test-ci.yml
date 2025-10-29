@@ -111,9 +111,9 @@ jobs:
         run: |
           docker exec cloudberry-pxf bash -c "
             set -eo pipefail
-            mkdir -p /home/gpadmin/cloudberry
+            mkdir -p /home/gpadmin/
             chown -R gpadmin:gpadmin /home/gpadmin/
-            cd /home/gpadmin/cloudberry
+            cd /home/gpadmin/
             git clone --depth 1 --recurse-submodules https://github.com/apache/cloudberry.git cloudberry
             chown -R gpadmin:gpadmin cloudberry
             chmod -R 755 cloudberry

@@ -94,9 +94,24 @@ jobs:
       - name: Cloudberry Environment Initialization
         run: |
           docker exec cloudberry-pxf bash -c "
-            # Fix PAM configuration for sudo
+            # Fix sudo file ownership and permissions
+            chown root:root /etc/sudo.conf
+            chown root:root /usr/bin/sudo
+            chmod 4755 /usr/bin/sudo
+            chown root:root /etc/sudoers
+            chmod 440 /etc/sudoers
+            chown -R root:root /etc/sudoers.d/
+
+            # Fix sudo plugin ownership
+            chown -R root:root /usr/libexec/sudo/
+
+            # Fix SSH related files
+            chown root:root /usr/share/empty.sshd
+            chmod 755 /usr/share/empty.sshd
+
+            # Add gpadmin to sudoers
             echo 'gpadmin ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
-            
+
             if ! su - gpadmin -c '/tmp/init_system.sh'; then
               echo 'Container initialization failed'
               exit 1

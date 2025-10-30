@@ -174,6 +174,51 @@ jobs:
               exit 1
             fi
           "
+      - name: Checkout PXF source code in container
+        run: |
+          docker exec cloudberry-pxf bash -c "
+            su - gpadmin -c '
+              cd /home/gpadmin/
+              if [ ! -d cloudberry-pxf ]; then
+                git clone https://github.com/MisterRaindrop/cloudberry-pxf.git cloudberry-pxf
+                cd cloudberry-pxf
+              fi
+            '
+          "
+      - name: Build and Install PXF in container
+        run: |
+          docker exec cloudberry-pxf bash -c "
+            # Install additional build dependencies
+            dnf install -y --allowerasing golang gcc gcc-c++ curl-devel postgresql-devel
+            
+            su - gpadmin -c '
+              set -eo pipefail
+              export GPHOME=/usr/local/cloudberry-db
+              export PATH=\$GPHOME/bin:\$PATH
+              source \$GPHOME/cloudberry-env.sh
+              
+              cd cloudberry-pxf
+              
+              # Build all PXF components
+              make all
+              
+              # Install PXF
+              make install
+              
+              # Set up PXF environment
+              export PXF_HOME=/usr/local/pxf
+              export PXF_BASE=\$HOME/pxf-base
+              export PATH=\$PXF_HOME/bin:\$PATH
+              
+              # Initialize PXF
+              pxf prepare
+              pxf start
+              
+              # Verify PXF is running
+              pxf status
+            '
+          "
+
       - name: Create Cloudberry demo cluster
         env:
           SRC_DIR: ${{ github.workspace }}/cloudberry
@@ -236,3 +281,80 @@ jobs:
               psql -d postgres -c \"SELECT * FROM gp_segment_configuration;\"
             '
           "
+      - name: Create shared network
+        run: docker network create pxf-test-network
+      - name: Restore Docker images from cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-images
+          key: pxf-docker-images-${{ github.sha }}
+          restore-keys: |
+            pxf-docker-images-
+
+      - name: Load and start Hadoop services container
+        run: |
+          # Restore and load Docker images
+          if [ -f /tmp/docker-images/singlecluster.tar.gz ]; then
+            echo "Loading singlecluster image..."
+            docker load < /tmp/docker-images/singlecluster.tar.gz
+            docker images | grep singlecluster
+          else
+            echo "No cached singlecluster image found"
+            exit 1
+          fi
+
+          # Start Hadoop services container
+          echo "Starting Hadoop services container..."
+          docker run -d \
+            --name hadoop-services \
+            --hostname hadoop-services \
+            --network pxf-test-network \
+            -p 9000:9000 \
+            -p 9870:9870 \
+            -p 8088:8088 \
+            -p 2181:2181 \
+            -p 9083:9083 \
+            -p 16000:16000 \
+            -p 16010:16010 \
+            pxf/singlecluster:3
+
+          # Wait for services to be ready
+          echo "Waiting for Hadoop services to be ready..."
+          timeout 300 bash -c 'until docker exec hadoop-services nc -z localhost 9000; do sleep 10; done'
+          echo "Hadoop services are ready!"
+      - name: Configure Hadoop services connection
+        run: |
+          su - gpadmin -c "
+            # Configure Hadoop connection to services
+            export GPHD_ROOT=/tmp/hadoop-services
+            mkdir -p \$GPHD_ROOT/conf
+
+            # Create configuration files pointing to service containers
+            cat > \$GPHD_ROOT/conf/core-site.xml << EOF
+            <?xml version=\"1.0\"?>
+            <configuration>
+              <property>
+                <name>fs.defaultFS</name>
+                <value>hdfs://hadoop-services:9000</value>
+              </property>
+            </configuration>
+            EOF
+
+            cat > \$GPHD_ROOT/conf/hbase-site.xml << EOF
+            <?xml version=\"1.0\"?>
+            <configuration>
+              <property>
+                <name>hbase.zookeeper.quorum</name>
+                <value>hadoop-services:2181</value>
+              </property>
+            </configuration>
+            EOF
+          "
+
+      - name: Wait for Hadoop services to be ready
+        run: |
+          echo "Waiting for Hadoop services to be ready..."
+          timeout 300 bash -c 'until nc -z hadoop-services 9000; do sleep 5; done'
+          timeout 300 bash -c 'until nc -z hadoop-services 2181; do sleep 5; done'
+          timeout 300 bash -c 'until nc -z hadoop-services 16000; do sleep 5; done'
+          echo "All Hadoop services are ready!"

@@ -126,14 +126,37 @@ jobs:
         run: |
           docker exec cloudberry-pxf bash -c "
             set -eo pipefail
-            SRC_DIR='/home/gpadmin/cloudberry'
-            LOGS_DIR='build-logs'
+            export SRC_DIR='/home/gpadmin/cloudberry'
+            export LOGS_DIR='build-logs'
+
+            chown root:root /usr/bin/sudo
+            chmod 4755 /usr/bin/sudo
+            chown root:root /usr/libexec/sudo/sudoers.so
+            chown root:root /etc/sudo.conf
+            chown root:root /etc/sudoers
+            chmod 644 /etc/sudo.conf
+            chmod 440 /etc/sudoers
+            chown root:root /etc/sudoers.d
+            chmod 755 /etc/sudoers.d
+            chown root:root /etc/sudoers.d/*
+            chmod 440 /etc/sudoers.d/*
+
+            if [ -f /usr/bin/visudo ]; then
+                chown root:root /usr/bin/visudo
+                chmod 4755 /usr/bin/visudo
+            elif [ -f /usr/sbin/visudo ]; then
+                chown root:root /usr/sbin/visudo
+                chmod 4755 /usr/sbin/visudo
+            fi
+
+            echo 'gpadmin ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+
             mkdir -p \"\${SRC_DIR}/\${LOGS_DIR}\" \"\${SRC_DIR}/\${LOGS_DIR}/details\"
             chown -R gpadmin:gpadmin \"\${SRC_DIR}\"
             chmod -R 755 \"\${SRC_DIR}\"
             chmod 777 \"\${SRC_DIR}/\${LOGS_DIR}\"
-            chmod +x \"\${SRC_DIR}\"/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh
-            if ! time su - gpadmin -c 'cd \${SRC_DIR} && SRC_DIR=\${SRC_DIR} ENABLE_DEBUG=false \${SRC_DIR}/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh'; then
+            chmod +x /home/gpadmin/cloudberry/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh
+            if ! time su - gpadmin -c 'cd /home/gpadmin/cloudberry && SRC_DIR=/home/gpadmin/cloudberry ENABLE_DEBUG=false /home/gpadmin/cloudberry/devops/build/automation/cloudberry/scripts/configure-cloudberry.sh'; then
               echo 'Configure script failed'
               exit 1
             fi
@@ -144,9 +167,9 @@ jobs:
         run: |
           docker exec cloudberry-pxf bash -c "
             set -eo pipefail
-            SRC_DIR='/home/gpadmin/cloudberry'
-            chmod +x \"\${SRC_DIR}\"/devops/build/automation/cloudberry/scripts/build-cloudberry.sh
-            if ! time su - gpadmin -c 'cd \${SRC_DIR} && SRC_DIR=\${SRC_DIR} \${SRC_DIR}/devops/build/automation/cloudberry/scripts/build-cloudberry.sh'; then
+            export SRC_DIR='/home/gpadmin/cloudberry'
+            chmod +x /home/gpadmin/cloudberry/devops/build/automation/cloudberry/scripts/build-cloudberry.sh
+            if ! time su - gpadmin -c 'cd /home/gpadmin/cloudberry && SRC_DIR=/home/gpadmin/cloudberry /home/gpadmin/cloudberry/devops/build/automation/cloudberry/scripts/build-cloudberry.sh'; then
               echo 'Build script failed'
               exit 1
             fi
@@ -158,14 +181,46 @@ jobs:
         run: |
           docker exec cloudberry-pxf bash -c "
             set -eo pipefail
+            chown root:root /usr/bin/sudo
+            chmod 4755 /usr/bin/sudo
+            chown root:root /usr/libexec/sudo/sudoers.so
+            chown root:root /etc/sudo.conf
+            chown root:root /etc/sudoers
+            chmod 644 /etc/sudo.conf
+            chmod 440 /etc/sudoers
+            chown root:root /etc/sudoers.d
+            chmod 755 /etc/sudoers.d
+            chown root:root /etc/sudoers.d/*
+            chmod 440 /etc/sudoers.d/*
+
+            if [ -f /usr/bin/visudo ]; then
+                chown root:root /usr/bin/visudo
+                chmod 4755 /usr/bin/visudo
+            elif [ -f /usr/sbin/visudo ]; then
+                chown root:root /usr/sbin/visudo
+                chmod 4755 /usr/sbin/visudo
+            fi
+
             su - gpadmin -c '
               set -eo pipefail
-              SRC_DIR='/home/gpadmin/cloudberry'
-              cd \${SRC_DIR}
-              export SRC_DIR=\${SRC_DIR}
-              export NUM_PRIMARY_MIRROR_PAIRS=\${NUM_PRIMARY_MIRROR_PAIRS}
-              chmod +x devops/build/automation/cloudberry/scripts/create-cloudberry-demo-cluster.sh
-              ./devops/build/automation/cloudberry/scripts/create-cloudberry-demo-cluster.sh
+              export SRC_DIR='/home/gpadmin/cloudberry'
+
+              chmod 700 ~/.ssh
+              chmod 600 ~/.ssh/authorized_keys
+              chmod 600 ~/.ssh/id_rsa
+              chmod 644 ~/.ssh/id_rsa.pub
+              chmod 644 ~/.ssh/known_hosts
+
+              sudo ls -la /usr/share/empty.sshd/
+              sudo chown root:root /usr/share/empty.sshd/
+              sudo chmod 755 /usr/share/empty.sshd/
+              echo \"Updated permissions:\"
+              sudo ls -la /usr/share/empty.sshd/
+
+              cd /home/gpadmin/cloudberry
+              export NUM_PRIMARY_MIRROR_PAIRS=1
+              chmod +x /home/gpadmin/cloudberry/devops/build/automation/cloudberry/scripts/create-cloudberry-demo-cluster.sh
+              /home/gpadmin/cloudberry/devops/build/automation/cloudberry/scripts/create-cloudberry-demo-cluster.sh
             '
           "
       - name: Verify Cloudberry cluster
@@ -173,9 +228,9 @@ jobs:
           docker exec cloudberry-pxf bash -c "
             set -eo pipefail
             su - gpadmin -c '
-              SRC_DIR='/home/gpadmin/cloudberry'
+              export SRC_DIR='/home/gpadmin/cloudberry'
               source /usr/local/cloudberry-db/cloudberry-env.sh
-              source \${SRC_DIR}/cloudberry/gpAux/gpdemo/gpdemo-env.sh
+              source /home/gpadmin/cloudberry/gpAux/gpdemo/gpdemo-env.sh
               gpstate -s
               psql -d postgres -c \"SELECT version();\"
               psql -d postgres -c \"SELECT * FROM gp_segment_configuration;\"

@@ -174,51 +174,6 @@ jobs:
               exit 1
             fi
           "
-      - name: Checkout PXF source code in container
-        run: |
-          docker exec cloudberry-pxf bash -c "
-            su - gpadmin -c '
-              cd /home/gpadmin/
-              if [ ! -d cloudberry-pxf ]; then
-                git clone https://github.com/MisterRaindrop/cloudberry-pxf.git cloudberry-pxf
-                cd cloudberry-pxf
-              fi
-            '
-          "
-      - name: Build and Install PXF in container
-        run: |
-          docker exec cloudberry-pxf bash -c "
-            # Install additional build dependencies
-            dnf install -y --allowerasing golang gcc gcc-c++ curl-devel postgresql-devel
-            
-            su - gpadmin -c '
-              set -eo pipefail
-              export GPHOME=/usr/local/cloudberry-db
-              export PATH=\$GPHOME/bin:\$PATH
-              source \$GPHOME/cloudberry-env.sh
-              
-              cd cloudberry-pxf
-              
-              # Build all PXF components
-              make all
-              
-              # Install PXF
-              make install
-              
-              # Set up PXF environment
-              export PXF_HOME=/usr/local/pxf
-              export PXF_BASE=\$HOME/pxf-base
-              export PATH=\$PXF_HOME/bin:\$PATH
-              
-              # Initialize PXF
-              pxf prepare
-              pxf start
-              
-              # Verify PXF is running
-              pxf status
-            '
-          "
-
       - name: Create Cloudberry demo cluster
         env:
           SRC_DIR: ${{ github.workspace }}/cloudberry
@@ -279,6 +234,51 @@ jobs:
               gpstate -s
               psql -d postgres -c \"SELECT version();\"
               psql -d postgres -c \"SELECT * FROM gp_segment_configuration;\"
+            '
+          "
+      - name: Checkout PXF source code in container
+        run: |
+          docker exec cloudberry-pxf bash -c "
+            su - gpadmin -c '
+              cd /home/gpadmin/
+              if [ ! -d cloudberry-pxf ]; then
+                git clone https://github.com/MisterRaindrop/cloudberry-pxf.git cloudberry-pxf
+                cd cloudberry-pxf
+              fi
+            '
+          "
+      - name: Build and Install PXF in container
+        run: |
+          docker exec cloudberry-pxf bash -c "
+            # Install additional build dependencies
+            dnf install -y --allowerasing golang gcc gcc-c++ curl-devel postgresql-devel make
+            
+            su - gpadmin -c '
+              set -eo pipefail
+              export GPHOME=/usr/local/cloudberry-db
+              export PATH=$GPHOME/bin:$PATH
+              source $GPHOME/cloudberry-env.sh
+              
+              cd cloudberry-pxf
+              
+              # Build all PXF components
+              make all
+              
+              # Install PXF
+              make install
+              
+              # Set up PXF environment
+              export PXF_HOME=/usr/local/cloudberry-db/pxf
+              export PXF_BASE=$HOME/pxf-base
+              export PATH=$PXF_HOME/bin:$PATH
+              export JAVA_HOME=/usr/lib/jvm/java-11-openjdk
+              
+              # Initialize PXF
+              pxf prepare
+              pxf start
+              
+              # Verify PXF is running
+              pxf status
             '
           "
       - name: Create shared network

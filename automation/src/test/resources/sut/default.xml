@@ -1,7 +1,7 @@
 <sut>
     <cluster>
         <class>org.greenplum.pxf.automation.components.cluster.SingleCluster</class>
-        <host>localhost</host>
+        <host>singlecluster</host>
     </cluster>
 
     <gpdb>
@@ -23,7 +23,7 @@
 
     <hdfs>
         <class>org.greenplum.pxf.automation.components.hdfs.Hdfs</class>
-        <host>localhost</host>
+        <host>singlecluster</host>
         <port>8020</port>
         <workingDirectory>tmp/pxf_automation_data/__UUID__</workingDirectory>
         <scheme>hdfs</scheme>
@@ -66,12 +66,12 @@
 
     <hbase>
         <class>org.greenplum.pxf.automation.components.hbase.HBase</class>
-        <host>localhost</host>
+        <host>singlecluster</host>
     </hbase>
 
     <hive>
         <class>org.greenplum.pxf.automation.components.hive.Hive</class>
-        <host>localhost</host>
+        <host>singlecluster</host>
         <port>10000</port>
     </hive>
 

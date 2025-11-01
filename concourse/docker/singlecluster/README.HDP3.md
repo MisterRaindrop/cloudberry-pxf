@@ -25,7 +25,7 @@ Initialization
 2. Pull down the singlecluster-HDP3 components:
 
     ```sh
-   docker compose build singlecluster
+   podman-compose build singlecluster
     ```
 
 3. Initialize an instance

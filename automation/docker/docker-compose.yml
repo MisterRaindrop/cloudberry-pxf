@@ -1,0 +1,84 @@
+services:
+  # Hadoop services container
+  singlecluster:
+    build:
+      context: ../../concourse/docker/singlecluster
+      dockerfile: Dockerfile
+    image: pxf/singlecluster:3
+    container_name: singlecluster
+    hostname: singlecluster
+    ports:
+      - "9000:9000"    # HDFS NameNode
+      - "9870:9870"    # HDFS NameNode Web UI
+      - "8088:8088"    # YARN ResourceManager Web UI
+      - "2181:2181"    # Zookeeper
+      - "9083:9083"    # Hive Metastore
+      - "16000:16000"  # HBase Master
+      - "16010:16010"  # HBase Master Web UI
+      - "2222:22"
+    environment:
+      - JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+      - START_YARN=true
+      - START_HIVEMETASTORE=true
+      - START_HBASE=true
+      - START_PXF=false
+    networks:
+      - pxf-test-network
+    command: |
+      /bin/bash -c "
+        echo 'Setting up environment...'
+        export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+        export PATH=\$$JAVA_HOME/bin:\$$PATH
+        
+        echo 'Java version:'
+        java -version
+        
+        echo 'Initializing Hadoop cluster...'
+        /home/gpadmin/workspace/singlecluster/bin/init-gphd.sh
+        
+        echo 'Starting Hadoop services...'
+        /home/gpadmin/workspace/singlecluster/bin/start-gphd.sh
+        
+        echo 'All services started, keeping container running...'
+        tail -f /dev/null
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9870"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # Cloudberry with PXF container
+  cloudberry-pxf:
+    build:
+      context: ../../concourse/docker/pxf-cbdb-dev/rocky9
+      dockerfile: Dockerfile
+    image: pxf-cbdb-test
+    container_name: cloudberry-pxf
+    hostname: cdw
+    user: root
+    shm_size: 2gb
+    ulimits:
+      core: -1
+    environment:
+      - USE_LOCAL_SOURCE=true
+      - JAVA_HOME=/usr/lib/jvm/java-11-openjdk
+      - GPHOME=/usr/local/cloudberry-db
+      - PXF_HOME=/usr/local/pxf
+    networks:
+      - pxf-test-network
+    depends_on:
+      singlecluster:
+        condition: service_healthy
+    command: |
+      bash -c "
+        echo 'Starting Cloudberry and PXF services...'
+        /usr/local/bin/build-cloudberry-pxf.sh
+        echo 'Services started, keeping container running...'
+        tail -f /dev/null
+      "
+
+networks:
+  pxf-test-network:
+    driver: bridge

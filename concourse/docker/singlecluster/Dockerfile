@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND noninteractive
 
 RUN apt-get update &&  \
     apt-get install -y --no-install-recommends \
-      curl ca-certificates
+      curl ca-certificates openjdk-11-jdk
 
 # TODO: update hive to support java 11+
 ENV    HADOOP_VERSION=3.1.2
@@ -68,6 +68,19 @@ RUN mkdir -p $TEZ_ROOT && \
     tar xvf tez.tar.gz -C $TEZ_ROOT --strip-components 1 && \
     rm tez.tar.gz
 
-COPY docker/singlecluster/templates $GPHD_ROOT
-COPY docker/singlecluster/conf $GPHD_ROOT/conf
-COPY docker/singlecluster/bin $GPHD_ROOT/bin
+COPY templates $GPHD_ROOT
+COPY conf $GPHD_ROOT/conf
+COPY bin $GPHD_ROOT/bin
+
+# Set executable permissions for scripts
+RUN chmod +x $GPHD_ROOT/bin/*
+
+# Set Java environment for Hadoop services
+ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+ENV PATH=$JAVA_HOME/bin:$PATH
+
+# Expose ports
+EXPOSE 9000 9870 8088 2181 9083 16000 16010
+
+# Start Hadoop services and keep container running
+CMD ["/bin/bash", "-c", "/home/gpadmin/workspace/singlecluster/bin/init-gphd.sh && /home/gpadmin/workspace/singlecluster/bin/start-gphd.sh && tail -f /dev/null"]

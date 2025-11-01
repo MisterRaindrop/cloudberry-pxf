@@ -1,5 +1,5 @@
 # paths
-export JAVA_HOME=${JAVA_HOME:=/Library/Java/Home}
+export JAVA_HOME=${JAVA_HOME:=/usr/lib/jvm/java-11-openjdk-amd64}
 export STORAGE_ROOT=$GPHD_ROOT/storage
 export HADOOP_STORAGE_ROOT=$STORAGE_ROOT/hadoop
 export ZOOKEEPER_STORAGE_ROOT=$STORAGE_ROOT/zookeeper

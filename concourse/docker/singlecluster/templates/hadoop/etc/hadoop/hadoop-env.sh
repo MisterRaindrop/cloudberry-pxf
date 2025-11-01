@@ -21,4 +21,4 @@ export HADOOP_LOG_DIR=$LOGS_ROOT
 export HADOOP_PID_DIR=$PIDS_ROOT
 
 # FIXME: remove after upgrading to new Hive version
-export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64

@@ -68,14 +68,20 @@ chown -R gpadmin:gpadmin /home/gpadmin/.ssh/
 # ----------------------------------------------------------------------
 # Build Cloudberry
 # ----------------------------------------------------------------------
-./build_cloudberrry.sh
+./script/build_cloudberrry.sh
 
 
 # ----------------------------------------------------------------------
 # Build pxf
 # ----------------------------------------------------------------------
-./build_pxf.sh
-source ./pxf-env.sh
+./script/build_pxf.sh
+
+
+# ----------------------------------------------------------------------
+# Source pxf env
+# ----------------------------------------------------------------------
+source ./script/pxf-env.sh
+
 # ----------------------------------------------------------------------
 # Prepare PXF
 # ----------------------------------------------------------------------
@@ -128,8 +134,33 @@ sudo chown -R gpadmin:gpadmin /home/gpadmin/.m2
 sudo chmod -R 755 /home/gpadmin/.m2
 
 # make without arguments runs all tests
+cd /home/gpadmin/workspace/cloudberry-pxf/cli
+make test
+
+cd /home/gpadmin/workspace/cloudberry-pxf/fdw
+make test
+
+cd /home/gpadmin/workspace/cloudberry-pxf/external-table
+make installcheck
+
+cd /home/gpadmin/workspace/cloudberry-pxf/server
+./gradlew test
+
 cd /home/gpadmin/workspace/cloudberry-pxf/automation
 make
+make TEST=HdfsSmokeTest
+make GROUP=gpdb || true
+
+
+# --------------------------------------------------------------------
+# Collect and upload artifacts
+# --------------------------------------------------------------------
+mkdir -p ~/artifacts/logs
+echo "PXF artifacts bundle" > ~/artifacts/manifest.txt
+cp -r ~/pxf-base/logs/* ~/artifacts/logs/ 2>/dev/null || true
+cp -r ~/workspace/cloudberry-pxf/server/build/reports/tests/test ~/artifacts/ 2>/dev/null || true
+cp -r ~/workspace/cloudberry-pxf/automation/*/reports  ~/artifacts/ 2>/dev/null || true
+
 
 # Keep container running
 #tail -f /dev/null

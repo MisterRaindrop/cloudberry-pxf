@@ -94,7 +94,7 @@ export PXF_HOST=localhost # 0.0.0.0  # listen on all interfaces
 # Prepare a new $PXF_BASE directory on each Greenplum Database host.
 # - create directory structure in $PXF_BASE
 # - copy configuration files from $PXF_HOME/conf to $PXF_BASE/conf
-/usr/local/pxf/bin/pxf cluster prepare
+#/usr/local/pxf/bin/pxf cluster prepare
 
 # Use Java 11:
 echo "JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64" >> $PXF_BASE/conf/pxf-env.sh

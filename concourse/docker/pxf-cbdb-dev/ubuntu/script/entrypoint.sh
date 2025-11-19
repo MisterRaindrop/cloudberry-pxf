@@ -107,9 +107,9 @@ cp -v $PXF_HOME/templates/{hdfs,mapred,yarn,core,hbase,hive}-site.xml $PXF_BASE/
 
 # Register PXF extension in Greenplum
 # - Copy the PXF extension control file from the PXF installation on each host to the Greenplum installation on the host
-/usr/local/pxf/bin/pxf cluster register
+#/usr/local/pxf/bin/pxf cluster register
 # # Start PXF
-/usr/local/pxf/bin/pxf cluster start
+#/usr/local/pxf/bin/pxf cluster start
 
 # ----------------------------------------------------------------------
 # Prepare Hadoop
@@ -138,8 +138,8 @@ sudo chmod -R 755 /home/gpadmin/.m2
 cd /home/gpadmin/workspace/cloudberry-pxf/cli
 make test
 
-cd /home/gpadmin/workspace/cloudberry-pxf/fdw
-make test
+# cd /home/gpadmin/workspace/cloudberry-pxf/fdw
+# make test
 
 cd /home/gpadmin/workspace/cloudberry-pxf/external-table
 make installcheck

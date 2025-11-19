@@ -23,7 +23,7 @@ env:
   GPHOME: "/usr/local/cloudberry-db"
   CLOUDBERRY_VERSION: "main"
   PXF_HOME: "/usr/local/pxf"
-  PXF_VERSION: "main"
+  PXF_VERSION: "liuxiaoyu/merge_2"
 
 jobs:
   pxf-build-install-test:

@@ -23,7 +23,6 @@ env:
   GPHOME: "/usr/local/cloudberry-db"
   CLOUDBERRY_VERSION: "main"
   PXF_HOME: "/usr/local/pxf"
-  PXF_VERSION: "liuxiaoyu/merge_2"
 
 jobs:
   pxf-build-install-test:
@@ -42,8 +41,8 @@ jobs:
     - name: Checkout Apache Cloudberry pxf source
       uses: actions/checkout@v4
       with:
-        repository: apache/cloudberry-pxf
-        ref: main
+        repository: MisterRaindrop/cloudberry-pxf
+        ref: liuxiaoyu/merge_2
         fetch-depth: 1
         persist-credentials: false
         path: cloudberry-pxf

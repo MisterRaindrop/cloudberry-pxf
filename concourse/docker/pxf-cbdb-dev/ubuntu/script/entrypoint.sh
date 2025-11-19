@@ -68,6 +68,7 @@ chown -R gpadmin:gpadmin /home/gpadmin/.ssh/
 # ----------------------------------------------------------------------
 # Build Cloudberry
 # ----------------------------------------------------------------------
+sudo chown -R gpadmin:gpadmin /home/gpadmin/workspace/
 ./script/build_cloudberrry.sh
 
 

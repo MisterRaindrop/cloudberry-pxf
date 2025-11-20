@@ -74,18 +74,14 @@ jobs:
     - name: Extract test artifacts from container
       if: always()
       run: |
-        cd ${{ github.workspace }}/cloudberry-pxf/
-        mkdir -p automation/test_artifacts/surefire-reports
-        mkdir -p automation/test_artifacts/automation_logs
-        mkdir -p automation/test_artifacts/pxf_regress
+        echo "Test results are already available in mounted volume:"
+        ls -la ${{ github.workspace }}/cloudberry-pxf/automation/test_artifacts/ || echo "No test_artifacts directory found"
         
-        # Copy test results from mapped volumes
-        cp -r automation/target/surefire-reports/* automation/test_artifacts/surefire-reports/ 2>/dev/null || echo "No surefire-reports found"
-        cp -r automation/automation_logs/* automation/test_artifacts/automation_logs/ 2>/dev/null || echo "No automation_logs found"
-        cp -r regression/pxf_regress/* automation/test_artifacts/pxf_regress/ 2>/dev/null || echo "No pxf_regress found"
-        
-        echo "Extracted artifacts:"
-        ls -la automation/test_artifacts/ || echo "No test_artifacts directory"
+        # Show summary if available
+        if [ -f ${{ github.workspace }}/cloudberry-pxf/automation/test_artifacts/summary.csv ]; then
+          echo "Test Summary:"
+          cat ${{ github.workspace }}/cloudberry-pxf/automation/test_artifacts/summary.csv
+        fi
         
     - name: Cleanup containers
       if: always()
@@ -101,9 +97,7 @@ jobs:
       with:
         name: automation-test-results-pxf-cbdb-dev
         path: |
-          ./cloudberry-pxf/automation/test_artifacts/surefire-reports
-          ./cloudberry-pxf/automation/test_artifacts/automation_logs
-          ./cloudberry-pxf/automation/test_artifacts/pxf_regress
+          ${{ github.workspace }}/cloudberry-pxf/automation/test_artifacts/
         retention-days: 30
 
     - name: Evaluate module build/test results
@@ -124,54 +118,101 @@ jobs:
           
           let hasErrors = false;
           
-          // Check if test reports exist
-          const testReportsDir = './cloudberry-pxf/automation/test_artifacts/surefire-reports';
-          if (!fs.existsSync(testReportsDir)) {
-            core.error('No test reports found for PXF');
-            summary.addRaw('No test reports available\n\n');
-            hasErrors = true;
-          }
-          
-          // Process TestNG XML results
-          const testngResultsPath = path.join(testReportsDir, 'testng-results.xml');
-          if (fs.existsSync(testngResultsPath)) {
+          // Check if test summary exists
+          const testSummaryPath = '${{ github.workspace }}/cloudberry-pxf/automation/test_artifacts/summary.csv';
+          if (fs.existsSync(testSummaryPath)) {
             try {
-              const xmlContent = fs.readFileSync(testngResultsPath, 'utf8');
-            
-              // Extract test statistics using regex
-              const totalMatch = xmlContent.match(/total="(\d+)"/);
-              const passedMatch = xmlContent.match(/passed="(\d+)"/);
-              const failedMatch = xmlContent.match(/failed="(\d+)"/);
-              const skippedMatch = xmlContent.match(/skipped="(\d+)"/);
-            
-              const total = totalMatch ? totalMatch[1] : '0';
-              const passed = passedMatch ? passedMatch[1] : '0';
-              const failed = failedMatch ? failedMatch[1] : '0';
-              const skipped = skippedMatch ? skippedMatch[1] : '0';
-            
-              // Add test statistics to summary
-              summary
-                .addRaw(`\n\nTest Results:\n\n`)
-                .addRaw(`Total: ${total}\n\n`)
-                .addRaw(`Passed: ${passed}\n\n`)
-                .addRaw(`Failed: ${failed}\n\n`)
-                .addRaw(`Skipped: ${skipped}\n\n`)
-            
-              // Check if there are failed or skipped tests
-              const failedCount = parseInt(failed) || 0;
-              const skippedCount = parseInt(skipped) || 0;
-            
-              if (failedCount > 0) {
-                core.error(`Test execution failed: ${failedCount} test(s) failed`);
-                hasErrors = true;
-              }
-              if (skippedCount > 0) {
-                core.warning(`Test execution incomplete: ${skippedCount} test(s) skipped`);
+              const csvContent = fs.readFileSync(testSummaryPath, 'utf8');
+              const lines = csvContent.trim().split('\n');
+              
+              if (lines.length > 1) {
+                // Parse CSV and create table
+                const headers = lines[0].split(',');
+                const rows = lines.slice(1).map(line => line.split(','));
+                
+                // Add test results table
+                summary.addHeading('🧪 Test Results', 3);
+                summary.addTable([
+                  headers,
+                  ...rows
+                ]);
+                
+                // Check for failures
+                let totalTests = 0;
+                let failedTests = 0;
+                let passedTests = 0;
+                
+                rows.forEach(row => {
+                  totalTests++;
+                  if (row[1] === 'FAIL') {
+                    failedTests++;
+                    hasErrors = true;
+                  } else if (row[1] === 'PASS') {
+                    passedTests++;
+                  }
+                });
+                
+                summary.addRaw(`\n\n**Summary**: ${totalTests} test components, ${passedTests} passed, ${failedTests} failed\n\n`);
+                
+                if (failedTests > 0) {
+                  core.error(`${failedTests} test component(s) failed`);
+                }
               }
             } catch (error) {
-              console.log('Error processing TestNG results:', error.message);
-              core.error('Error processing test results');
+              console.log('Error processing test summary:', error.message);
+              core.error('Error processing test summary');
               hasErrors = true;
+            }
+          } else {
+            summary.addRaw('No test summary found\n\n');
+          }
+          
+          // Check if TestNG results exist
+          const testReportsDir = '${{ github.workspace }}/cloudberry-pxf/automation/test_artifacts/surefire-reports';
+          if (fs.existsSync(testReportsDir)) {
+            const testngResultsPath = path.join(testReportsDir, 'testng-results.xml');
+            if (fs.existsSync(testngResultsPath)) {
+              try {
+                const xmlContent = fs.readFileSync(testngResultsPath, 'utf8');
+              
+                // Extract test statistics using regex
+                const totalMatch = xmlContent.match(/total="(\d+)"/);
+                const passedMatch = xmlContent.match(/passed="(\d+)"/);
+                const failedMatch = xmlContent.match(/failed="(\d+)"/);
+                const skippedMatch = xmlContent.match(/skipped="(\d+)"/);
+              
+                const total = totalMatch ? totalMatch[1] : '0';
+                const passed = passedMatch ? passedMatch[1] : '0';
+                const failed = failedMatch ? failedMatch[1] : '0';
+                const skipped = skippedMatch ? skippedMatch[1] : '0';
+              
+                // Add TestNG statistics to summary
+                summary
+                  .addHeading('🔬 Automation Test Details', 3)
+                  .addTable([
+                    ['Metric', 'Count'],
+                    ['Total Tests', total],
+                    ['Passed', passed],
+                    ['Failed', failed],
+                    ['Skipped', skipped]
+                  ]);
+              
+                // Check if there are failed tests
+                const failedCount = parseInt(failed) || 0;
+                const skippedCount = parseInt(skipped) || 0;
+              
+                if (failedCount > 0) {
+                  core.error(`Automation tests failed: ${failedCount} test(s) failed`);
+                  hasErrors = true;
+                }
+                if (skippedCount > 0) {
+                  core.warning(`Automation tests incomplete: ${skippedCount} test(s) skipped`);
+                }
+              } catch (error) {
+                console.log('Error processing TestNG results:', error.message);
+                core.error('Error processing automation test results');
+                hasErrors = true;
+              }
             }
           }
           

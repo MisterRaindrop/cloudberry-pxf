@@ -123,7 +123,7 @@ $GPHD_ROOT/bin/init-gphd.sh
 $GPHD_ROOT/bin/start-gphd.sh
 
 # --------------------------------------------------------------------
-# Run tests
+# Run tests independently and collect results
 # --------------------------------------------------------------------
 # create GOCACHE directory for gpadmin user
 sudo mkdir -p /home/gpadmin/.cache/go-build
@@ -134,33 +134,77 @@ sudo mkdir -p /home/gpadmin/.m2
 sudo chown -R gpadmin:gpadmin /home/gpadmin/.m2
 sudo chmod -R 755 /home/gpadmin/.m2
 
-# make without arguments runs all tests
-cd /home/gpadmin/workspace/cloudberry-pxf/cli
-make test
+# Output results directly to mounted automation directory
+TEST_RESULTS_DIR="/home/gpadmin/workspace/cloudberry-pxf/automation/test_artifacts"
+mkdir -p "$TEST_RESULTS_DIR"
+echo "Test Component,Status,Duration,Details" > "$TEST_RESULTS_DIR/summary.csv"
 
-# cd /home/gpadmin/workspace/cloudberry-pxf/fdw
-# make test
+# Function to run test and record result
+run_test() {
+    local component="$1"
+    local test_dir="$2"
+    local test_cmd="$3"
+    local start_time=$(date +%s)
+    
+    echo "Running $component tests..."
+    cd "$test_dir"
+    
+    if eval "$test_cmd" > "$TEST_RESULTS_DIR/${component}.log" 2>&1; then
+        local status="PASS"
+        local details="All tests passed"
+    else
+        local status="FAIL"
+        local details="Check ${component}.log for details"
+    fi
+    
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    echo "$component,$status,${duration}s,$details" >> "$TEST_RESULTS_DIR/summary.csv"
+    echo "$component: $status (${duration}s)"
+}
 
-cd /home/gpadmin/workspace/cloudberry-pxf/external-table
-make installcheck
+# Run CLI tests
+run_test "CLI" "/home/gpadmin/workspace/cloudberry-pxf/cli" "make test"
 
-cd /home/gpadmin/workspace/cloudberry-pxf/server
-./gradlew test
+# Run External Table tests
+run_test "External-Table" "/home/gpadmin/workspace/cloudberry-pxf/external-table" "make installcheck"
 
-cd /home/gpadmin/workspace/cloudberry-pxf/automation
-make
-make TEST=HdfsSmokeTest
-make GROUP=gpdb || true
+# Run Server tests
+run_test "Server" "/home/gpadmin/workspace/cloudberry-pxf/server" "./gradlew test"
 
+# Run Automation setup
+run_test "Automation-Setup" "/home/gpadmin/workspace/cloudberry-pxf/automation" "make"
 
-# --------------------------------------------------------------------
-# Collect and upload artifacts
-# --------------------------------------------------------------------
-mkdir -p ~/artifacts/logs
-echo "PXF artifacts bundle" > ~/artifacts/manifest.txt
-cp -r ~/pxf-base/logs/* ~/artifacts/logs/ 2>/dev/null || true
-cp -r ~/workspace/cloudberry-pxf/server/build/reports/tests/test ~/artifacts/ 2>/dev/null || true
-cp -r ~/workspace/cloudberry-pxf/automation/*/reports  ~/artifacts/ 2>/dev/null || true
+# Run Smoke tests
+run_test "Smoke-Test" "/home/gpadmin/workspace/cloudberry-pxf/automation" "make TEST=HdfsSmokeTest"
+
+# Run GPDB group tests (allow failure)
+run_test "GPDB-Group" "/home/gpadmin/workspace/cloudberry-pxf/automation" "make GROUP=gpdb"
+
+# Copy additional test artifacts to mounted directory
+echo "Collecting additional test artifacts..."
+
+# Copy PXF logs
+mkdir -p "$TEST_RESULTS_DIR/pxf_logs"
+cp -r ~/pxf-base/logs/* "$TEST_RESULTS_DIR/pxf_logs/" 2>/dev/null || true
+
+# Copy server test reports
+mkdir -p "$TEST_RESULTS_DIR/server_reports"
+cp -r ~/workspace/cloudberry-pxf/server/build/reports/tests/test/* "$TEST_RESULTS_DIR/server_reports/" 2>/dev/null || true
+
+# Copy automation surefire reports (if they exist)
+if [ -d ~/workspace/cloudberry-pxf/automation/target/surefire-reports ]; then
+    cp -r ~/workspace/cloudberry-pxf/automation/target/surefire-reports "$TEST_RESULTS_DIR/"
+fi
+
+# Copy automation logs (if they exist)
+if [ -d ~/workspace/cloudberry-pxf/automation/automation_logs ]; then
+    cp -r ~/workspace/cloudberry-pxf/automation/automation_logs "$TEST_RESULTS_DIR/"
+fi
+
+echo "Test execution completed. Results available in $TEST_RESULTS_DIR"
+ls -la "$TEST_RESULTS_DIR"
 
 
 # Keep container running

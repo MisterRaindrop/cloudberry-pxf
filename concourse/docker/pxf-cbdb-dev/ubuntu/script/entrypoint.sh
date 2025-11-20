@@ -145,16 +145,31 @@ run_test() {
     local test_dir="$2"
     local test_cmd="$3"
     local start_time=$(date +%s)
+    local log_file="$TEST_RESULTS_DIR/${component}.log"
     
     echo "Running $component tests..."
     cd "$test_dir"
     
-    if eval "$test_cmd" > "$TEST_RESULTS_DIR/${component}.log" 2>&1; then
-        local status="PASS"
-        local details="All tests passed"
+    # Run the test and capture both exit code and output
+    if eval "$test_cmd" > "$log_file" 2>&1; then
+        local exit_code=0
     else
-        local status="FAIL"
-        local details="Check ${component}.log for details"
+        local exit_code=$?
+    fi
+    
+    # Check for specific failure patterns in the log
+    local status="PASS"
+    local details="All tests passed"
+    
+    if [ $exit_code -ne 0 ]; then
+        status="FAIL"
+        details="Exit code: $exit_code. Check ${component}.log for details"
+    elif grep -q "There are test failures\|BUILD FAILURE\|FAILED\|Failures: [1-9]" "$log_file"; then
+        status="FAIL"
+        details="Test failures detected. Check ${component}.log for details"
+    elif grep -q "Tests run:.*Failures: [1-9]" "$log_file"; then
+        status="FAIL"
+        details="Test failures detected. Check ${component}.log for details"
     fi
     
     local end_time=$(date +%s)

@@ -14,14 +14,7 @@ public class ProtocolUtils {
 
         ProtocolEnum result;
         try {
-            String protocol = System.getProperty(PROTOCOL_KEY);
-            if (protocol == null) {
-                protocol = System.getenv(PROTOCOL_KEY);
-            }
-            if (protocol == null) {
-                protocol = ProtocolEnum.HDFS.name();
-            }
-            result = ProtocolEnum.valueOf(protocol.toUpperCase());
+            result = ProtocolEnum.valueOf(System.getProperty(PROTOCOL_KEY, ProtocolEnum.HDFS.name()).toUpperCase());
         } catch (Exception e) {
             result = ProtocolEnum.HDFS; // use HDFS as default mode
         }

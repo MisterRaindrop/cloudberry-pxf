@@ -161,6 +161,8 @@ public class JdbcHiveTest extends BaseFeature {
         hive.createTableAndVerify(hiveTypesTable);
         // copy file with types data to hdfs
         hdfs.copyFromLocal(localDataResourcesFolder + "/hive/" + hiveTypesFileName, hdfs.getWorkingDirectory() + "/" + hiveTypesFileName);
+        hdfs.waitForFile(hdfs.getWorkingDirectory() + "/" + hiveTypesFileName, 120);
+
         // load to hive table
         hive.loadData(hiveTypesTable, hdfs.getWorkingDirectory() + "/" + hiveTypesFileName, false);
     }

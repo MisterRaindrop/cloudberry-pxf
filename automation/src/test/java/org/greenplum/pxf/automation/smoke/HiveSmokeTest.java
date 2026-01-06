@@ -45,6 +45,8 @@ public class HiveSmokeTest extends BaseSmoke {
         Table dataTable = getSmallData();
         hdfs.writeTableToFile((hdfs.getWorkingDirectory() + "/" + fileName), dataTable, ",");
 
+        hdfs.waitForFile((hdfs.getWorkingDirectory() + "/" + fileName), 120);
+
         // load data from HDFS file
         hive.loadData(hiveTable, (hdfs.getWorkingDirectory() + "/" + fileName), false);
     }

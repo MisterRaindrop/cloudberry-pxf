@@ -384,7 +384,7 @@ public class HiveBaseTest extends BaseFeature {
         hdfs.copyFromLocal(localPath, hdfsPath);
 
         // Verify file was copied to HDFS
-        hdfs.waitForFile(hdfsPath, 3);
+        hdfs.waitForFile(hdfsPath, 120);
         
         // load to hive table
         hive.loadData(tableName, hdfsPath, false);

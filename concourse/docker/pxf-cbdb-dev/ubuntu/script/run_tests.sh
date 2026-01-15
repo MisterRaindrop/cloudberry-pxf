@@ -550,6 +550,8 @@ feature_test(){
 
 gpdb_test() {
   export PROTOCOL=HDFS
+  export PXF_HOME=${PXF_HOME:-/usr/local/pxf}
+  export PATH="${PXF_HOME}/bin:${PATH}"
   echo "[run_tests] Starting GROUP=gpdb"
   make GROUP="gpdb" || true
   save_test_reports "gpdb"

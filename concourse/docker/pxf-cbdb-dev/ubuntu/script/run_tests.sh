@@ -549,6 +549,7 @@ feature_test(){
 }
 
 gpdb_test() {
+  export PROTOCOL=HDFS
   echo "[run_tests] Starting GROUP=gpdb"
   make GROUP="gpdb" || true
   save_test_reports "gpdb"

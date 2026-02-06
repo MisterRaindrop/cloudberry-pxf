@@ -96,6 +96,67 @@ public class FragmenterService {
     }
 
     /**
+     * Returns all fragments without segment-based filtering.
+     * This method is used for parallel execution mode where fragment
+     * distribution is handled by the FDW client rather than the server.
+     *
+     * @param context the request context
+     * @return the complete list of fragments for the request
+     * @throws IOException when an exception occurs
+     */
+    public List<Fragment> getAllFragments(RequestContext context) throws IOException {
+        LOG.trace("Received FRAGMENTER call for all fragments (parallel mode)");
+        Instant startTime = Instant.now();
+
+        List<Fragment> fragments = getFragmentsFromCache(context, startTime);
+
+        if (LOG.isDebugEnabled()) {
+            int numberOfFragments = fragments.size();
+            long elapsedMillis = Duration.between(startTime, Instant.now()).toMillis();
+
+            LOG.debug("Returning all {} fragment{} for path {} in {} ms (parallel mode)",
+                    numberOfFragments, numberOfFragments == 1 ? "" : "s",
+                    context.getDataSource(), elapsedMillis);
+        }
+
+        return fragments;
+    }
+
+    /**
+     * Returns a single fragment at the specified index.
+     * This method is used for parallel execution mode where each worker
+     * requests a specific fragment by index.
+     *
+     * @param context       the request context
+     * @param fragmentIndex the index of the fragment to return
+     * @return the fragment at the specified index
+     * @throws IOException              when an exception occurs
+     * @throws IllegalArgumentException when the fragment index is out of bounds
+     */
+    public Fragment getFragmentByIndex(RequestContext context, int fragmentIndex) throws IOException {
+        LOG.debug("Received request for specific fragment index {} (parallel mode)", fragmentIndex);
+        Instant startTime = Instant.now();
+
+        List<Fragment> allFragments = getFragmentsFromCache(context, startTime);
+
+        if (fragmentIndex < 0 || fragmentIndex >= allFragments.size()) {
+            throw new IllegalArgumentException(String.format(
+                    "Invalid fragment index %d, valid range is 0 to %d",
+                    fragmentIndex, allFragments.size() - 1));
+        }
+
+        Fragment fragment = allFragments.get(fragmentIndex);
+
+        if (LOG.isDebugEnabled()) {
+            long elapsedMillis = Duration.between(startTime, Instant.now()).toMillis();
+            LOG.debug("Returning fragment {} of {} for path {} in {} ms (parallel mode)",
+                    fragmentIndex, allFragments.size(), context.getDataSource(), elapsedMillis);
+        }
+
+        return fragment;
+    }
+
+    /**
      * Returns the list of fragments from the fragmenter cache. If the cache is
      * empty, it populates the cache with the list of fragments. When
      * concurrent requests are made to the cache with the same key, the first

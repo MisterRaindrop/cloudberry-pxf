@@ -39,6 +39,7 @@
 #define FDW_OPTION_REJECT_LIMIT "reject_limit"
 #define FDW_OPTION_REJECT_LIMIT_TYPE "reject_limit_type"
 #define FDW_OPTION_RESOURCE "resource"
+#define FDW_OPTION_ENABLE_PARALLEL "enable_parallel"
 
 #define FDW_COPY_OPTION_FORMAT "format"
 #define FDW_COPY_OPTION_HEADER "header"
@@ -71,6 +72,10 @@ static const struct PxfFdwOption valid_options[] = {
 	{FDW_OPTION_REJECT_LIMIT, ForeignTableRelationId},
 	{FDW_OPTION_REJECT_LIMIT_TYPE, ForeignTableRelationId},
 	{FDW_OPTION_LOG_ERRORS, ForeignTableRelationId},
+
+	/* Parallel execution */
+	{FDW_OPTION_ENABLE_PARALLEL, ForeignTableRelationId},
+	{FDW_OPTION_ENABLE_PARALLEL, ForeignServerRelationId},
 
 	/* Sentinel */
 	{NULL, InvalidOid}
@@ -454,6 +459,8 @@ PxfGetOptions(Oid foreigntableid)
 			opt->log_errors = defGetBoolean(def);
 		else if (strcmp(def->defname, FDW_OPTION_DISABLE_PPD) == 0)
 			opt->disable_ppd = defGetBoolean(def);
+		else if (strcmp(def->defname, FDW_OPTION_ENABLE_PARALLEL) == 0)
+			opt->enable_parallel = defGetBoolean(def);
 		else if (strcmp(def->defname, FDW_OPTION_FORMAT) == 0)
 		{
 			opt->format = defGetString(def);

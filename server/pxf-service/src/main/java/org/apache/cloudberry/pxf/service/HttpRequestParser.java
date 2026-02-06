@@ -135,6 +135,13 @@ public class HttpRequestParser implements RequestParser<MultiValueMap<String, St
 
         context.setFragmenter(params.removeUserProperty("FRAGMENTER"));
 
+        // Parse specific fragment index for parallel execution
+        String fragmentIndexStr = params.removeOptionalProperty("FRAGMENT-INDEX");
+        if (StringUtils.isNotBlank(fragmentIndexStr)) {
+            context.setSpecificFragmentIndex(Integer.parseInt(fragmentIndexStr));
+            LOG.debug("Parallel mode: specific fragment index {} requested", fragmentIndexStr);
+        }
+
         context.setHost(params.removeProperty("URL-HOST"));
         context.setMetadata(params.removeUserProperty("METADATA"));
         context.setPort(params.removeIntProperty("URL-PORT"));

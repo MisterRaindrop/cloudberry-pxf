@@ -32,10 +32,15 @@
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/guc.h"
+#include "access/parallel.h"
+#include "storage/shm_toc.h"
 
 PG_MODULE_MAGIC;
 
 #define DEFAULT_PXF_FDW_STARTUP_COST   50000
+
+extern int max_parallel_workers_per_gather;
 
 /*
  * Error token embedded in the data sent by PXF as part of an error row
@@ -93,6 +98,14 @@ static void EndCopyModify(CopyToState cstate);
 static void PxfBeginScanErrorCallback(void *arg);
 static void PxfCopyFromErrorCallback(void *arg);
 
+/* Parallel scan support */
+static bool pxfIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte);
+static Size pxfEstimateDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt);
+static void pxfInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate);
+static void pxfReInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate);
+static void pxfInitializeWorkerForeignScan(ForeignScanState *node, shm_toc *toc, void *coordinate);
+static void pxfShutdownForeignScan(ForeignScanState *node);
+
 /*
  * Foreign-data wrapper handler functions:
  * returns a struct with pointers to the
@@ -147,6 +160,17 @@ pxf_fdw_handler(PG_FUNCTION_ARGS)
 	fdw_routine->EndForeignInsert = pxfEndForeignInsert;
 	fdw_routine->EndForeignModify = pxfEndForeignModify;
 	fdw_routine->IsForeignRelUpdatable = pxfIsForeignRelUpdatable;
+
+	/*
+	 * Parallel scan support.
+	 * These callbacks enable parallel foreign scans when enable_parallel option is set.
+	 */
+	fdw_routine->IsForeignScanParallelSafe = pxfIsForeignScanParallelSafe;
+	fdw_routine->EstimateDSMForeignScan = pxfEstimateDSMForeignScan;
+	fdw_routine->InitializeDSMForeignScan = pxfInitializeDSMForeignScan;
+	fdw_routine->ReInitializeDSMForeignScan = pxfReInitializeDSMForeignScan;
+	fdw_routine->InitializeWorkerForeignScan = pxfInitializeWorkerForeignScan;
+	fdw_routine->ShutdownForeignScan = pxfShutdownForeignScan;
 
 	PG_RETURN_POINTER(fdw_routine);
 }
@@ -251,7 +275,7 @@ pxfGetForeignPaths(PlannerInfo *root,
 	ForeignPath *path = NULL;
 	int			total_cost = DEFAULT_PXF_FDW_STARTUP_COST;
 	PxfFdwRelationInfo *fpinfo = (PxfFdwRelationInfo *) baserel->fdw_private;
-
+	PxfOptions *options = PxfGetOptions(foreigntableid);
 
 	elog(DEBUG5, "pxf_fdw: pxfGetForeignPaths starts on segment: %d", PXF_SEGMENT_ID);
 
@@ -265,7 +289,20 @@ pxfGetForeignPaths(PlannerInfo *root,
 								   NULL,	/* no extra plan */
 								   fpinfo->retrieved_attrs);
 
+	/*
+	 * If parallel execution is enabled, mark the path as parallel safe.
+	 * This allows the planner to consider parallel foreign scans.
+	 */
+	if (options->enable_parallel)
+	{
+		path->path.parallel_safe = true;
+		path->path.parallel_aware = false;
+		path->path.parallel_workers = baserel->rows > 1000 ? 
+			Min(max_parallel_workers_per_gather, 4) : 0;
 
+		elog(DEBUG3, "pxf_fdw: parallel execution enabled, parallel_workers=%d",
+			 path->path.parallel_workers);
+	}
 
 	/*
 	 * Create a ForeignPath node and add it as only possible path.
@@ -1006,4 +1043,195 @@ PxfCopyFromErrorCallback(void *arg)
             }
         }
     }
+}
+
+/*
+ * ============================================================================
+ * Parallel Foreign Scan Support
+ * ============================================================================
+ */
+
+/*
+ * pxfIsForeignScanParallelSafe
+ *		Determine whether a foreign scan is parallel safe.
+ *
+ * Returns true if enable_parallel option is set for the foreign table,
+ * allowing the planner to consider parallel execution.
+ */
+static bool
+pxfIsForeignScanParallelSafe(PlannerInfo *root,
+							  RelOptInfo *rel,
+							  RangeTblEntry *rte)
+{
+	PxfOptions *options = PxfGetOptions(rte->relid);
+
+	elog(DEBUG3, "pxf_fdw: pxfIsForeignScanParallelSafe called, enable_parallel=%d",
+		 options->enable_parallel);
+
+	/*
+	 * Only return true if parallel execution is explicitly enabled.
+	 * This ensures backward compatibility - existing queries continue
+	 * to work without parallel execution unless explicitly enabled.
+	 */
+	return options->enable_parallel;
+}
+
+/*
+ * pxfEstimateDSMForeignScan
+ *		Estimate the amount of dynamic shared memory required for parallel scan.
+ *
+ * We need space for the PxfParallelScanState structure which tracks
+ * fragment distribution among parallel workers.
+ */
+static Size
+pxfEstimateDSMForeignScan(ForeignScanState *node,
+						   ParallelContext *pcxt)
+{
+	Oid			foreigntableid = RelationGetRelid(node->ss.ss_currentRelation);
+	PxfOptions *options = PxfGetOptions(foreigntableid);
+
+	if (!options->enable_parallel)
+		return 0;
+
+	elog(DEBUG3, "pxf_fdw: pxfEstimateDSMForeignScan returning %zu bytes",
+		 sizeof(PxfParallelScanState));
+
+	return sizeof(PxfParallelScanState);
+}
+
+/*
+ * pxfInitializeDSMForeignScan
+ *		Initialize dynamic shared memory for parallel scan (leader process).
+ *
+ * The leader process fetches the list of fragments from PXF server and
+ * initializes the shared state for fragment distribution.
+ */
+static void
+pxfInitializeDSMForeignScan(ForeignScanState *node,
+							 ParallelContext *pcxt,
+							 void *coordinate)
+{
+	PxfParallelScanState *pstate = (PxfParallelScanState *) coordinate;
+	PxfFdwScanState *pxfsstate = (PxfFdwScanState *) node->fdw_state;
+	Oid			foreigntableid = RelationGetRelid(node->ss.ss_currentRelation);
+	PxfOptions *options = PxfGetOptions(foreigntableid);
+
+	if (!options->enable_parallel)
+		return;
+
+	elog(DEBUG3, "pxf_fdw: pxfInitializeDSMForeignScan initializing parallel state");
+
+	/* Initialize the spinlock */
+	SpinLockInit(&pstate->mutex);
+
+	/*
+	 * Fetch fragment list from PXF server.
+	 * This populates pxfsstate->fragments and pxfsstate->num_fragments.
+	 */
+	if (pxfsstate != NULL)
+	{
+		int num_fragments = PxfBridgeFetchFragments(pxfsstate);
+		pstate->total_fragments = num_fragments;
+		pstate->next_fragment = 0;
+		pstate->finished = false;
+
+		/* Store reference to shared state */
+		pxfsstate->pstate = pstate;
+		pxfsstate->is_parallel = true;
+
+		elog(DEBUG3, "pxf_fdw: leader initialized with %d fragments", num_fragments);
+	}
+	else
+	{
+		/* No scan state yet, initialize with defaults */
+		pstate->total_fragments = 0;
+		pstate->next_fragment = 0;
+		pstate->finished = false;
+	}
+}
+
+/*
+ * pxfReInitializeDSMForeignScan
+ *		Reinitialize parallel scan state for rescan.
+ *
+ * Reset the fragment counter so workers can process fragments again.
+ */
+static void
+pxfReInitializeDSMForeignScan(ForeignScanState *node,
+							   ParallelContext *pcxt,
+							   void *coordinate)
+{
+	PxfParallelScanState *pstate = (PxfParallelScanState *) coordinate;
+	Oid			foreigntableid = RelationGetRelid(node->ss.ss_currentRelation);
+	PxfOptions *options = PxfGetOptions(foreigntableid);
+
+	if (!options->enable_parallel)
+		return;
+
+	elog(DEBUG3, "pxf_fdw: pxfReInitializeDSMForeignScan resetting parallel state");
+
+	SpinLockAcquire(&pstate->mutex);
+	pstate->next_fragment = 0;
+	pstate->finished = false;
+	SpinLockRelease(&pstate->mutex);
+}
+
+/*
+ * pxfInitializeWorkerForeignScan
+ *		Initialize a parallel worker's foreign scan state.
+ *
+ * Each worker attaches to the shared state and prepares to process fragments.
+ */
+static void
+pxfInitializeWorkerForeignScan(ForeignScanState *node,
+								shm_toc *toc,
+								void *coordinate)
+{
+	PxfParallelScanState *pstate = (PxfParallelScanState *) coordinate;
+	PxfFdwScanState *pxfsstate = (PxfFdwScanState *) node->fdw_state;
+	Oid			foreigntableid = RelationGetRelid(node->ss.ss_currentRelation);
+	PxfOptions *options = PxfGetOptions(foreigntableid);
+
+	if (!options->enable_parallel)
+		return;
+
+	elog(DEBUG3, "pxf_fdw: pxfInitializeWorkerForeignScan worker attaching to parallel state");
+
+	if (pxfsstate != NULL)
+	{
+		pxfsstate->pstate = pstate;
+		pxfsstate->is_parallel = true;
+		pxfsstate->num_fragments = pstate->total_fragments;
+		pxfsstate->current_fragment = -1;  /* Will be assigned on first iteration */
+	}
+}
+
+/*
+ * pxfShutdownForeignScan
+ *		Shutdown parallel foreign scan, cleanup shared resources.
+ */
+static void
+pxfShutdownForeignScan(ForeignScanState *node)
+{
+	PxfFdwScanState *pxfsstate = (PxfFdwScanState *) node->fdw_state;
+
+	elog(DEBUG3, "pxf_fdw: pxfShutdownForeignScan called");
+
+	if (pxfsstate != NULL && pxfsstate->is_parallel)
+	{
+		/* Mark as finished if we're the last one */
+		if (pxfsstate->pstate != NULL)
+		{
+			SpinLockAcquire(&pxfsstate->pstate->mutex);
+			pxfsstate->pstate->finished = true;
+			SpinLockRelease(&pxfsstate->pstate->mutex);
+		}
+
+		/* Clean up local fragment data */
+		if (pxfsstate->fragments != NULL)
+		{
+			pfree(pxfsstate->fragments);
+			pxfsstate->fragments = NULL;
+		}
+	}
 }

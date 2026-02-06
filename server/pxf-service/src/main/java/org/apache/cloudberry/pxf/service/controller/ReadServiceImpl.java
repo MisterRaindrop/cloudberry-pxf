@@ -42,10 +42,10 @@ public class ReadServiceImpl extends BaseServiceImpl<OperationStats> implements 
      * @param metricsReporter      metrics reporter service
      */
     public ReadServiceImpl(ConfigurationFactory configurationFactory,
-                           BridgeFactory bridgeFactory,
-                           SecurityService securityService,
-                           FragmenterService fragmenterService,
-                           MetricsReporter metricsReporter) {
+            BridgeFactory bridgeFactory,
+            SecurityService securityService,
+            FragmenterService fragmenterService,
+            MetricsReporter metricsReporter) {
         super("Read", configurationFactory, bridgeFactory, securityService, metricsReporter);
         this.fragmenterService = fragmenterService;
     }
@@ -53,14 +53,18 @@ public class ReadServiceImpl extends BaseServiceImpl<OperationStats> implements 
     @Override
     public void readData(RequestContext context, OutputStream outputStream) {
         // wrapping the invocation of processData(..) with the error reporting logic
-        // since any exception thrown from it must be logged, as this method is called asynchronously
-        // and is the last opportunity to log the exception while having MDC logging context defined
+        // since any exception thrown from it must be logged, as this method is called
+        // asynchronously
+        // and is the last opportunity to log the exception while having MDC logging
+        // context defined
         invokeWithErrorHandling(() -> processData(context, () -> writeStream(context, outputStream)));
     }
 
     /**
-     * Calls Fragmenter service to get a list of fragments for the resource, then reads records for each fragment
-     * and writes them to the output stream. Maintains the satistics about the progress of the query and reports
+     * Calls Fragmenter service to get a list of fragments for the resource, then
+     * reads records for each fragment
+     * and writes them to the output stream. Maintains the satistics about the
+     * progress of the query and reports
      * it to the caller even if the operation failed or aborted.
      *
      * @param context      request context
@@ -78,11 +82,26 @@ public class ReadServiceImpl extends BaseServiceImpl<OperationStats> implements 
         OperationStats queryStats = new OperationStats(OperationStats.Operation.READ, metricsReporter, context);
         OperationResult queryResult = new OperationResult();
 
-        // dataStream (and outputStream as the result) will close automatically at the end of the try block
+        // dataStream (and outputStream as the result) will close automatically at the
+        // end of the try block
         CountingOutputStream countingOutputStream = new CountingOutputStream(outputStream);
         String sourceName = null;
         try {
-            List<Fragment> fragments = fragmenterService.getFragmentsForSegment(context);
+            List<Fragment> fragments;
+
+            // Check if a specific fragment index was requested (parallel execution mode)
+            if (context.hasSpecificFragment()) {
+                // Parallel mode: only process the specified fragment
+                Fragment specificFragment = fragmenterService.getFragmentByIndex(
+                        context, context.getSpecificFragmentIndex());
+                fragments = java.util.Collections.singletonList(specificFragment);
+                log.debug("Parallel mode: processing only fragment {} of resource {}",
+                        context.getSpecificFragmentIndex(), context.getDataSource());
+            } else {
+                // Normal mode: get fragments filtered by segment
+                fragments = fragmenterService.getFragmentsForSegment(context);
+            }
+
             for (int i = 0; i < fragments.size(); i++) {
                 Fragment fragment = fragments.get(i);
                 sourceName = fragment.getSourceName();
@@ -116,8 +135,10 @@ public class ReadServiceImpl extends BaseServiceImpl<OperationStats> implements 
                 }
             }
         } catch (Exception e) {
-            // the exception is not re-thrown but passed to the caller in the queryResult so that
-            // the caller has a chance to inspect / report query stats before re-throwing the exception
+            // the exception is not re-thrown but passed to the caller in the queryResult so
+            // that
+            // the caller has a chance to inspect / report query stats before re-throwing
+            // the exception
             queryResult.setException(e);
             queryResult.setSourceName(sourceName);
         } finally {
@@ -128,7 +149,8 @@ public class ReadServiceImpl extends BaseServiceImpl<OperationStats> implements 
     }
 
     /**
-     * Processes a single fragment identified in the RequestContext and updates query statistics.
+     * Processes a single fragment identified in the RequestContext and updates
+     * query statistics.
      *
      * @param countingOutputStream output stream to write data to
      * @param context              request context
@@ -136,8 +158,8 @@ public class ReadServiceImpl extends BaseServiceImpl<OperationStats> implements 
      * @throws Exception if operation fails
      */
     private void processFragment(CountingOutputStream countingOutputStream,
-                                 RequestContext context,
-                                 OperationStats queryStats) throws Exception {
+            RequestContext context,
+            OperationStats queryStats) throws Exception {
         Writable record;
         DataOutputStream dos = new DataOutputStream(countingOutputStream);
 
@@ -177,12 +199,14 @@ public class ReadServiceImpl extends BaseServiceImpl<OperationStats> implements 
             fragmentStats.setByteCount(countingOutputStream.getCount() - previousStreamByteCount);
             fragmentStats.flushStats();
 
-            // update query stats even if there was an exception so that they can be properly reported by the
+            // update query stats even if there was an exception so that they can be
+            // properly reported by the
             // error reporter
             queryStats.update(fragmentStats);
 
             log.debug("Finished processing fragment {} of resource {} in {} ms, wrote {} records and {} bytes.",
-                    context.getFragmentIndex(), context.getDataSource(), duration.toMillis(), fragmentStats.getRecordCount(), fragmentStats.getByteCount());
+                    context.getFragmentIndex(), context.getDataSource(), duration.toMillis(),
+                    fragmentStats.getRecordCount(), fragmentStats.getByteCount());
             metricsReporter.reportTimer(MetricsReporter.PxfMetric.FRAGMENTS_SENT, duration, context, success);
         }
     }

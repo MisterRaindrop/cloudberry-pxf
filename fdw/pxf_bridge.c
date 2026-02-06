@@ -23,6 +23,7 @@
 
 #include "cdb/cdbtm.h"
 #include "cdb/cdbvars.h"
+#include "utils/builtins.h"
 
 /* helper function declarations */
 static void BuildUriForRead(PxfFdwScanState *pxfsstate);
@@ -181,4 +182,209 @@ FillBuffer(PxfFdwScanState *pxfsstate, char *start, int minlen, int maxlen)
 	}
 
 	return ptr - start;
+}
+
+/*
+ * ============================================================================
+ * Parallel Execution Support
+ * ============================================================================
+ */
+
+/*
+ * Build URI for fetching fragment list from PXF server
+ */
+static void
+BuildUriForFragments(PxfFdwScanState *pxfsstate)
+{
+	PxfOptions *options = pxfsstate->options;
+
+	resetStringInfo(&pxfsstate->uri);
+	appendStringInfo(&pxfsstate->uri, "http://%s:%d/%s/fragments",
+					 options->pxf_host, options->pxf_port, PXF_SERVICE_PREFIX);
+	elog(DEBUG2, "pxf_fdw: uri %s for fragments", pxfsstate->uri.data);
+}
+
+/*
+ * PxfBridgeFetchFragments
+ *		Fetch the list of fragments from PXF server.
+ *
+ * This function is called by the leader process to get the complete list
+ * of fragments that need to be processed. The fragments are stored in
+ * pxfsstate->fragments array.
+ *
+ * Returns the number of fragments fetched.
+ *
+ * Note: Currently this is a placeholder implementation. The actual
+ * implementation will need to:
+ * 1. Call the PXF /fragments endpoint
+ * 2. Parse the JSON response
+ * 3. Store fragment metadata in pxfsstate->fragments
+ */
+int
+PxfBridgeFetchFragments(PxfFdwScanState *pxfsstate)
+{
+	CHURL_HEADERS headers;
+	CHURL_HANDLE handle;
+	StringInfoData response;
+	char		buffer[8192];
+	size_t		bytes_read;
+	int			num_fragments = 0;
+
+	elog(DEBUG3, "pxf_fdw: PxfBridgeFetchFragments starting");
+
+	/* Initialize headers */
+	headers = churl_headers_init();
+
+	/* Build URI for fragments endpoint */
+	BuildUriForFragments(pxfsstate);
+
+	/* Build HTTP headers */
+	BuildHttpHeaders(headers,
+					 pxfsstate->options,
+					 pxfsstate->relation,
+					 pxfsstate->filter_str,
+					 pxfsstate->retrieved_attrs,
+					 pxfsstate->projectionInfo);
+
+	/* Add header to request JSON response */
+	churl_headers_append(headers, "Accept", "application/json");
+
+	/* Initialize download */
+	handle = churl_init_download(pxfsstate->uri.data, headers);
+
+	/* Read the response */
+	initStringInfo(&response);
+	while ((bytes_read = churl_read(handle, buffer, sizeof(buffer) - 1)) > 0)
+	{
+		buffer[bytes_read] = '\0';
+		appendStringInfoString(&response, buffer);
+	}
+
+	churl_read_check_connectivity(handle);
+
+	elog(DEBUG3, "pxf_fdw: fragments response length=%d", response.len);
+
+	/*
+	 * TODO: Parse JSON response to extract fragment metadata.
+	 * For now, we use a simplified approach where the server returns
+	 * the number of fragments as a simple count.
+	 *
+	 * Expected JSON format:
+	 * {
+	 *   "PXFFragments": [
+	 *     {"index": 0, "sourceName": "...", "metadata": "..."},
+	 *     {"index": 1, "sourceName": "...", "metadata": "..."},
+	 *     ...
+	 *   ]
+	 * }
+	 *
+	 * For the initial implementation, we'll estimate based on response.
+	 * A proper implementation would use a JSON parser.
+	 */
+	if (response.len > 0)
+	{
+		/* Simple heuristic: count occurrences of "index" */
+		char *ptr = response.data;
+		while ((ptr = strstr(ptr, "\"index\"")) != NULL)
+		{
+			num_fragments++;
+			ptr++;
+		}
+
+		/* Allocate fragment array if we found any */
+		if (num_fragments > 0)
+		{
+			pxfsstate->fragments = (PxfFragmentData *)
+				palloc0(sizeof(PxfFragmentData) * num_fragments);
+			pxfsstate->num_fragments = num_fragments;
+
+			/* TODO: Actually parse and populate fragment data */
+			elog(DEBUG3, "pxf_fdw: found %d fragments", num_fragments);
+		}
+	}
+
+	/* Cleanup */
+	churl_cleanup(handle, false);
+	churl_headers_cleanup(headers);
+	pfree(response.data);
+
+	return num_fragments;
+}
+
+/*
+ * PxfBridgeGetNextFragment
+ *		Get the next fragment index for this worker to process.
+ *
+ * This function atomically increments the next_fragment counter in the
+ * shared parallel state and returns the fragment index for this worker
+ * to process.
+ *
+ * Returns -1 if all fragments have been assigned.
+ */
+int
+PxfBridgeGetNextFragment(PxfParallelScanState *pstate)
+{
+	int			fragment_idx;
+
+	if (pstate == NULL)
+		return -1;
+
+	SpinLockAcquire(&pstate->mutex);
+
+	if (pstate->next_fragment >= pstate->total_fragments)
+	{
+		/* All fragments have been assigned */
+		fragment_idx = -1;
+	}
+	else
+	{
+		fragment_idx = pstate->next_fragment;
+		pstate->next_fragment++;
+	}
+
+	SpinLockRelease(&pstate->mutex);
+
+	elog(DEBUG3, "pxf_fdw: PxfBridgeGetNextFragment returning fragment %d of %d",
+		 fragment_idx, pstate->total_fragments);
+
+	return fragment_idx;
+}
+
+/*
+ * PxfBridgeImportStartFragment
+ *		Start import for a specific fragment in parallel mode.
+ *
+ * This is similar to PxfBridgeImportStart but includes the fragment
+ * index in the request headers so the PXF server knows which specific
+ * fragment to return data for.
+ */
+void
+PxfBridgeImportStartFragment(PxfFdwScanState *pxfsstate, int fragmentIndex)
+{
+	char		fragment_idx_str[16];
+
+	elog(DEBUG3, "pxf_fdw: PxfBridgeImportStartFragment starting for fragment %d",
+		 fragmentIndex);
+
+	pxfsstate->churl_headers = churl_headers_init();
+
+	BuildUriForRead(pxfsstate);
+	BuildHttpHeaders(pxfsstate->churl_headers,
+					 pxfsstate->options,
+					 pxfsstate->relation,
+					 pxfsstate->filter_str,
+					 pxfsstate->retrieved_attrs,
+					 pxfsstate->projectionInfo);
+
+	/* Add fragment index header for parallel mode */
+	pg_ltoa(fragmentIndex, fragment_idx_str);
+	churl_headers_append(pxfsstate->churl_headers, "X-GP-FRAGMENT-INDEX", fragment_idx_str);
+
+	pxfsstate->churl_handle = churl_init_download(pxfsstate->uri.data, pxfsstate->churl_headers);
+
+	/* read some bytes to make sure the connection is established */
+	churl_read_check_connectivity(pxfsstate->churl_handle);
+
+	/* Update current fragment tracking */
+	pxfsstate->current_fragment = fragmentIndex;
 }

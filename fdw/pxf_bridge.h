@@ -30,9 +30,34 @@
 #include "nodes/execnodes.h"
 #include "nodes/parsenodes.h"
 #include "nodes/pg_list.h"
+#include "storage/spin.h"
 
 #define PXF_SEGMENT_ID                 GpIdentity.segindex
 #define PXF_SEGMENT_COUNT              getgpsegmentCount()
+
+/*
+ * Fragment metadata for parallel execution.
+ * Stored in local memory, not in shared memory.
+ */
+typedef struct PxfFragmentData
+{
+	char	   *source_name;		/* fragment source name (e.g. file path) */
+	int			index;				/* fragment index */
+	char	   *metadata;			/* fragment metadata (base64 encoded) */
+	char	   *profile;			/* optional profile override */
+} PxfFragmentData;
+
+/*
+ * Shared state for parallel foreign scan.
+ * This structure is stored in DSM (dynamic shared memory).
+ */
+typedef struct PxfParallelScanState
+{
+	slock_t		mutex;				/* mutex for accessing shared state */
+	int			total_fragments;	/* total number of fragments */
+	int			next_fragment;		/* next fragment index to be assigned */
+	bool		finished;			/* true if all fragments have been processed */
+} PxfParallelScanState;
 
 /*
  * Execution state of a foreign scan using pxf_fdw.
@@ -49,6 +74,13 @@ typedef struct PxfFdwScanState
 	PxfOptions *options;
 	CopyFromState	cstate;
 	ProjectionInfo *projectionInfo;
+
+	/* Parallel execution state */
+	bool		is_parallel;		/* true if running in parallel mode */
+	PxfParallelScanState *pstate;	/* pointer to shared state in DSM */
+	PxfFragmentData *fragments;		/* array of fragment metadata */
+	int			num_fragments;		/* total number of fragments */
+	int			current_fragment;	/* current fragment being processed */
 } PxfFdwScanState;
 
 /*
@@ -79,5 +111,16 @@ int			PxfBridgeRead(void *outbuf, int minlen, int maxlen, void *extra);
 
 /* Writes data from the given buffer of a given size to the PXF server */
 int			PxfBridgeWrite(PxfFdwModifyState *context, char *databuf, int datalen);
+
+/* Parallel execution support */
+
+/* Fetch fragment list from PXF server */
+int			PxfBridgeFetchFragments(PxfFdwScanState *pxfsstate);
+
+/* Get the next fragment index for this worker (thread-safe) */
+int			PxfBridgeGetNextFragment(PxfParallelScanState *pstate);
+
+/* Start import for a specific fragment in parallel mode */
+void		PxfBridgeImportStartFragment(PxfFdwScanState *pxfsstate, int fragmentIndex);
 
 #endif							/* _PXFBRIDGE_H */

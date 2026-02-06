@@ -117,6 +117,14 @@ public class RequestContext {
     private FragmentMetadata fragmentMetadata;
 
     /**
+     * The specific fragment index requested for parallel execution.
+     * When set (not null), indicates that only this specific fragment
+     * should be processed, bypassing the normal segment-based fragment
+     * distribution. This is used for PostgreSQL parallel workers.
+     */
+    private Integer specificFragmentIndex;
+
+    /**
      * The filter string, <tt>null</tt> if #hasFilter is <tt>false</tt>.
      */
     private String filterString;
@@ -478,6 +486,16 @@ public class RequestContext {
      */
     public boolean hasFilter() {
         return filterString != null;
+    }
+
+    /**
+     * Returns true if a specific fragment index was requested for parallel execution.
+     * When true, only the fragment at the specified index should be processed.
+     *
+     * @return true if a specific fragment index was requested
+     */
+    public boolean hasSpecificFragment() {
+        return specificFragmentIndex != null;
     }
 
     /**

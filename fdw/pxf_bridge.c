@@ -324,7 +324,7 @@ PxfBridgeFetchFragments(PxfFdwScanState *pxfsstate)
 int
 PxfBridgeGetNextFragment(PxfParallelScanState *pstate)
 {
-	int			fragment_idx;
+	int			logical_idx;
 
 	if (pstate == NULL)
 		return -1;
@@ -333,21 +333,25 @@ PxfBridgeGetNextFragment(PxfParallelScanState *pstate)
 
 	if (pstate->next_fragment >= pstate->total_fragments)
 	{
-		/* All fragments have been assigned */
-		fragment_idx = -1;
+		SpinLockRelease(&pstate->mutex);
+		return -1;
 	}
-	else
-	{
-		fragment_idx = pstate->next_fragment;
-		pstate->next_fragment++;
-	}
+	logical_idx = pstate->next_fragment++;
 
 	SpinLockRelease(&pstate->mutex);
 
-	elog(DEBUG3, "pxf_fdw: PxfBridgeGetNextFragment returning fragment %d of %d",
-		 fragment_idx, pstate->total_fragments);
+	/* Map logical → actual: the K-th fragment for segment S is at
+	 * actual_index = S + K * seg_count  (round-robin assignment) */
+	{
+		int			seg_id = PXF_SEGMENT_ID;
+		int			seg_count = PXF_SEGMENT_COUNT;
+		int			actual_idx = seg_id + logical_idx * seg_count;
 
-	return fragment_idx;
+		elog(DEBUG3, "pxf_fdw: segment %d: GetNextFragment logical=%d actual=%d",
+			 seg_id, logical_idx, actual_idx);
+
+		return actual_idx;
+	}
 }
 
 /*

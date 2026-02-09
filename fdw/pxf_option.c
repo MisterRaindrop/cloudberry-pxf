@@ -572,20 +572,37 @@ static void
 ValidateOption(char *option, Oid catalog)
 {
 	const struct PxfFdwOption *entry;
+	bool		found = false;
 
 	for (entry = valid_options; entry->optname; entry++)
 	{
-		/* option can only be defined at its catalog level */
-		if (strcmp(entry->optname, option) == 0 && catalog != entry->optcontext)
+		if (strcmp(entry->optname, option) == 0)
 		{
-			Relation	rel = RelationIdGetRelation(entry->optcontext);
+			/* option is recognized; check if it's allowed at this catalog level */
+			if (catalog == entry->optcontext)
+				return;		/* valid — exact match */
+			found = true;	/* name matches but at a different level */
+		}
+	}
 
-			ereport(ERROR,
-					(errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
-					 errmsg(
-							"the %s option can only be defined at the %s level",
-							option,
-							RelationGetRelationName(rel))));
+	if (found)
+	{
+		/*
+		 * The option exists but is not valid at this catalog level.
+		 * Report the first matching level for the error message.
+		 */
+		for (entry = valid_options; entry->optname; entry++)
+		{
+			if (strcmp(entry->optname, option) == 0)
+			{
+				Relation	rel = RelationIdGetRelation(entry->optcontext);
+
+				ereport(ERROR,
+						(errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
+						 errmsg("the %s option can only be defined at the %s level",
+								option,
+								RelationGetRelationName(rel))));
+			}
 		}
 	}
 }

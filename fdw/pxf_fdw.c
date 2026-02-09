@@ -92,6 +92,8 @@ static int	pxfIsForeignRelUpdatable(Relation rel);
 static PxfFdwModifyState *InitForeignModify(Relation relation);
 static void FinishForeignModify(PxfFdwModifyState *pxfmstate);
 static void InitCopyState(PxfFdwScanState *pxfsstate);
+static void CleanupCurrentFragment(PxfFdwScanState *pxfsstate);
+static void InitCopyStateForFragment(PxfFdwScanState *pxfsstate, int fragmentIndex);
 static void InitCopyStateForModify(PxfFdwModifyState *pxfmstate);
 static CopyToState BeginCopyToModify(Relation forrel, List *options);
 static void EndCopyModify(CopyToState cstate);
@@ -272,42 +274,46 @@ pxfGetForeignPaths(PlannerInfo *root,
 				   RelOptInfo *baserel,
 				   Oid foreigntableid)
 {
-	ForeignPath *path = NULL;
-	int			total_cost = DEFAULT_PXF_FDW_STARTUP_COST;
 	PxfFdwRelationInfo *fpinfo = (PxfFdwRelationInfo *) baserel->fdw_private;
 	PxfOptions *options = PxfGetOptions(foreigntableid);
+	Cost		startup = DEFAULT_PXF_FDW_STARTUP_COST;
+	Cost		run_cost = 1000;	/* data transfer cost estimate */
+	Cost		total = startup + run_cost;
 
 	elog(DEBUG5, "pxf_fdw: pxfGetForeignPaths starts on segment: %d", PXF_SEGMENT_ID);
 
-	path = create_foreignscan_path(root, baserel,
-								   NULL,	/* default pathtarget */
-								   baserel->rows,
-								   DEFAULT_PXF_FDW_STARTUP_COST,
-								   total_cost,
-								   NIL, /* no pathkeys */
-								   NULL,	/* no outer rel either */
-								   NULL,	/* no extra plan */
-								   fpinfo->retrieved_attrs);
+	/* Path 1: non-parallel (always, as fallback) */
+	add_path(baserel,
+			 (Path *) create_foreignscan_path(root, baserel, NULL,
+											  baserel->rows, startup, total,
+											  NIL, NULL, NULL,
+											  fpinfo->retrieved_attrs),
+			 root);
 
-	/*
-	 * If parallel execution is enabled, mark the path as parallel safe.
-	 * This allows the planner to consider parallel foreign scans.
-	 */
-	if (options->enable_parallel)
+	/* Path 2: parallel partial (only if enabled and planner allows) */
+	if (options->enable_parallel && baserel->consider_parallel)
 	{
-		path->path.parallel_safe = true;
-		path->path.parallel_aware = false;
-		path->path.parallel_workers = baserel->rows > 1000 ? 
-			Min(max_parallel_workers_per_gather, 4) : 0;
+		int			workers = Min(max_parallel_workers_per_gather, 4);
 
-		elog(DEBUG3, "pxf_fdw: parallel execution enabled, parallel_workers=%d",
-			 path->path.parallel_workers);
+		if (workers > 0)
+		{
+			ForeignPath *pp;
+
+			pp = create_foreignscan_path(root, baserel, NULL,
+										 baserel->rows / workers,	/* per-worker rows */
+										 startup,
+										 startup + run_cost / workers,	/* per-worker cost */
+										 NIL, NULL, NULL,
+										 fpinfo->retrieved_attrs);
+			pp->path.parallel_safe = true;
+			pp->path.parallel_aware = true;
+			pp->path.parallel_workers = workers;
+
+			add_partial_path(baserel, (Path *) pp);
+
+			elog(DEBUG3, "pxf_fdw: parallel partial path added, workers=%d", workers);
+		}
 	}
-
-	/*
-	 * Create a ForeignPath node and add it as only possible path.
-	 */
-	add_path(baserel, (Path *) path, root);
 
 	elog(DEBUG5, "pxf_fdw: pxfGetForeignPaths ends on segment: %d", PXF_SEGMENT_ID);
 }
@@ -419,7 +425,7 @@ pxfBeginForeignScan(ForeignScanState *node, int eflags)
 	 * Save state in node->fdw_state.  We must save enough information to call
 	 * BeginCopyFrom() again.
 	 */
-	pxfsstate = (PxfFdwScanState *) palloc(sizeof(PxfFdwScanState));
+	pxfsstate = (PxfFdwScanState *) palloc0(sizeof(PxfFdwScanState));
 	initStringInfo(&pxfsstate->uri);
 
 	pxfsstate->filter_str = filter_str;
@@ -429,18 +435,33 @@ pxfBeginForeignScan(ForeignScanState *node, int eflags)
 	pxfsstate->retrieved_attrs = retrieved_attrs;
 	pxfsstate->projectionInfo = node->ss.ps.ps_ProjInfo;
 
-    /* Set up callback to identify error foreign relation. */
-    ErrorContextCallback errcallback;
-    errcallback.callback = PxfBeginScanErrorCallback;
-    errcallback.arg = (void *) pxfsstate;
-    errcallback.previous = error_context_stack;
-    error_context_stack = &errcallback;
+	/* Initialize parallel scan fields */
+	pxfsstate->is_parallel = false;
+	pxfsstate->pstate = NULL;
+	pxfsstate->fragments = NULL;
+	pxfsstate->num_fragments = 0;
+	pxfsstate->current_fragment = -1;
 
-	InitCopyState(pxfsstate);
 	node->fdw_state = (void *) pxfsstate;
 
-    /* Restore the previous error callback */
-    error_context_stack = errcallback.previous;
+	/*
+	 * In parallel mode, defer connection setup to IterateForeignScan where
+	 * fragments are assigned. In non-parallel mode, initialize immediately.
+	 */
+	if (!options->enable_parallel)
+	{
+		/* Set up callback to identify error foreign relation. */
+		ErrorContextCallback errcallback;
+		errcallback.callback = PxfBeginScanErrorCallback;
+		errcallback.arg = (void *) pxfsstate;
+		errcallback.previous = error_context_stack;
+		error_context_stack = &errcallback;
+
+		InitCopyState(pxfsstate);
+
+		/* Restore the previous error callback */
+		error_context_stack = errcallback.previous;
+	}
 
     elog(DEBUG5, "pxf_fdw: pxfBeginForeignScan ends on segment: %d", PXF_SEGMENT_ID);
 }
@@ -463,54 +484,138 @@ pxfIterateForeignScan(ForeignScanState *node)
 	ErrorContextCallback errcallback;
 	bool		found;
 
-	/* Set up callback to identify error line number. */
-	errcallback.callback = PxfCopyFromErrorCallback;
-	errcallback.arg = (void *) pxfsstate;
-	errcallback.previous = error_context_stack;
-	error_context_stack = &errcallback;
-
-	/*
-	 * The protocol for loading a virtual tuple into a slot is first
-	 * ExecClearTuple, then fill the values/isnull arrays, then
-	 * ExecStoreVirtualTuple.  If we don't find another row in the file, we
-	 * just skip the last step, leaving the slot empty as required.
-	 *
-	 * We can pass ExprContext = NULL because we read all columns from the
-	 * file, so no need to evaluate default expressions.
-	 *
-	 * We can also pass tupleOid = NULL because we don't allow oids for
-	 * foreign tables.
-	 */
 	ExecClearTuple(slot);
 
-	found = NextCopyFrom(pxfsstate->cstate,
-						 NULL,
-						 slot->tts_values,
-						 slot->tts_isnull);
-
-	if (found)
+	if (pxfsstate->is_parallel)
 	{
-		if (pxfsstate->cstate->cdbsreh)
+		/*
+		 * Parallel mode: iterate over fragments assigned by shared state.
+		 * Each worker claims fragments one at a time and reads all rows
+		 * from each fragment before moving to the next.
+		 */
+		for (;;)
 		{
+			/* If no active connection, claim the next fragment */
+			if (pxfsstate->cstate == NULL)
+			{
+				MemoryContext oldcxt;
+				int		fragmentIndex;
+
+				fragmentIndex = PxfBridgeGetNextFragment(pxfsstate->pstate);
+				if (fragmentIndex < 0)
+					return slot;	/* EOF — no more fragments */
+
+				/*
+				 * Switch to a long-lived memory context. ForeignNext calls
+				 * IterateForeignScan in the per-tuple memory context, but
+				 * CopyFromState must survive across multiple tuples.
+				 */
+				oldcxt = MemoryContextSwitchTo(node->ss.ps.state->es_query_cxt);
+				InitCopyStateForFragment(pxfsstate, fragmentIndex);
+				MemoryContextSwitchTo(oldcxt);
+			}
+
+			/* Reset error-context fields before each read so the error
+			 * callback never sees stale/dangling pointers. */
+			pxfsstate->cstate->cur_attname = NULL;
+			pxfsstate->cstate->cur_attval = NULL;
+
+			/* Set up callback to identify error line number. */
+			errcallback.callback = PxfCopyFromErrorCallback;
+			errcallback.arg = (void *) pxfsstate;
+			errcallback.previous = error_context_stack;
+			error_context_stack = &errcallback;
+
+			found = NextCopyFrom(pxfsstate->cstate,
+								 NULL,
+								 slot->tts_values,
+								 slot->tts_isnull);
+
+			/* Remove error callback. */
+			error_context_stack = errcallback.previous;
+
+			if (found)
+			{
+				if (pxfsstate->cstate->cdbsreh)
+					pxfsstate->cstate->cdbsreh->processed++;
+
+				ExecStoreVirtualTuple(slot);
+				return slot;
+			}
+
+			/* Current fragment exhausted, clean up and try next */
+			CleanupCurrentFragment(pxfsstate);
+		}
+	}
+	else
+	{
+		/*
+		 * Non-parallel mode. Lazily initialize CopyState if needed — this
+		 * handles the case where enable_parallel was set but the executor
+		 * did not actually launch parallel workers (e.g. Cloudberry MPP
+		 * segments which don't use PostgreSQL parallel infrastructure).
+		 */
+		if (pxfsstate->cstate == NULL)
+		{
+			MemoryContext oldcxt;
+			ErrorContextCallback begincb;
+			begincb.callback = PxfBeginScanErrorCallback;
+			begincb.arg = (void *) pxfsstate;
+			begincb.previous = error_context_stack;
+			error_context_stack = &begincb;
+
 			/*
-			 * If NextCopyFrom failed, the processed row count will have
-			 * already been updated, but we need to update it in a successful
-			 * case.
-			 *
-			 * GPDB_91_MERGE_FIXME: this is almost certainly not the right
-			 * place for this, but row counts are currently scattered all over
-			 * the place. Consolidate.
+			 * Switch to a long-lived memory context. ForeignNext calls
+			 * IterateForeignScan in the per-tuple memory context, but
+			 * CopyFromState must survive across multiple tuples.
 			 */
-			pxfsstate->cstate->cdbsreh->processed++;
+			oldcxt = MemoryContextSwitchTo(node->ss.ps.state->es_query_cxt);
+			InitCopyState(pxfsstate);
+			MemoryContextSwitchTo(oldcxt);
+
+			error_context_stack = begincb.previous;
 		}
 
-		ExecStoreVirtualTuple(slot);
+		/* Reset error-context fields before each read so the error
+		 * callback never sees stale/dangling pointers. */
+		pxfsstate->cstate->cur_attname = NULL;
+		pxfsstate->cstate->cur_attval = NULL;
+
+		/* Set up callback to identify error line number. */
+		errcallback.callback = PxfCopyFromErrorCallback;
+		errcallback.arg = (void *) pxfsstate;
+		errcallback.previous = error_context_stack;
+		error_context_stack = &errcallback;
+
+		found = NextCopyFrom(pxfsstate->cstate,
+							 NULL,
+							 slot->tts_values,
+							 slot->tts_isnull);
+
+		if (found)
+		{
+			if (pxfsstate->cstate->cdbsreh)
+			{
+				/*
+				 * If NextCopyFrom failed, the processed row count will have
+				 * already been updated, but we need to update it in a
+				 * successful case.
+				 *
+				 * GPDB_91_MERGE_FIXME: this is almost certainly not the right
+				 * place for this, but row counts are currently scattered all
+				 * over the place. Consolidate.
+				 */
+				pxfsstate->cstate->cdbsreh->processed++;
+			}
+
+			ExecStoreVirtualTuple(slot);
+		}
+
+		/* Remove error callback. */
+		error_context_stack = errcallback.previous;
+
+		return slot;
 	}
-
-	/* Remove error callback. */
-	error_context_stack = errcallback.previous;
-
-	return slot;
 }
 
 /*
@@ -524,8 +629,19 @@ pxfReScanForeignScan(ForeignScanState *node)
 
 	PxfFdwScanState *pxfsstate = (PxfFdwScanState *) node->fdw_state;
 
-	EndCopyFrom(pxfsstate->cstate);
-	InitCopyState(pxfsstate);
+	if (pxfsstate->is_parallel)
+	{
+		/* Parallel: tear down current fragment connection if any.
+		 * Shared state reset is handled by ReInitializeDSM. */
+		CleanupCurrentFragment(pxfsstate);
+	}
+	else
+	{
+		/* Non-parallel: original code path */
+		if (pxfsstate->cstate != NULL)
+			EndCopyFrom(pxfsstate->cstate);
+		InitCopyState(pxfsstate);
+	}
 
 	elog(DEBUG5, "pxf_fdw: pxfReScanForeignScan ends on segment: %d", PXF_SEGMENT_ID);
 }
@@ -539,19 +655,45 @@ pxfEndForeignScan(ForeignScanState *node)
 {
 	elog(DEBUG5, "pxf_fdw: pxfEndForeignScan starts on segment: %d", PXF_SEGMENT_ID);
 
-	ForeignScan *foreignScan = (ForeignScan *) node->ss.ps.plan;
 	PxfFdwScanState *pxfsstate = (PxfFdwScanState *) node->fdw_state;
-
-	/* Release resources */
-	if (foreignScan->fdw_private)
-	{
-		elog(DEBUG5, "Freeing fdw_private");
-		pfree(foreignScan->fdw_private);
-	}
 
 	/* if pxfsstate is NULL, we are in EXPLAIN; nothing to do */
 	if (pxfsstate)
-		EndCopyFrom(pxfsstate->cstate);
+	{
+		if (pxfsstate->is_parallel)
+		{
+			/* Parallel: tear down any active fragment connection */
+			CleanupCurrentFragment(pxfsstate);
+
+			/* Free fragment array */
+			if (pxfsstate->fragments != NULL)
+			{
+				pfree(pxfsstate->fragments);
+				pxfsstate->fragments = NULL;
+			}
+		}
+		else
+		{
+			/* Non-parallel: clean up churl resources and CopyFromState */
+			churl_cleanup(pxfsstate->churl_handle, false);
+			pxfsstate->churl_handle = NULL;
+
+			churl_headers_cleanup(pxfsstate->churl_headers);
+			pxfsstate->churl_headers = NULL;
+
+			if (pxfsstate->cstate != NULL)
+			{
+				EndCopyFrom(pxfsstate->cstate);
+				pxfsstate->cstate = NULL;
+			}
+		}
+
+		/* Free the URI buffer */
+		pfree(pxfsstate->uri.data);
+
+		pfree(pxfsstate);
+		node->fdw_state = NULL;
+	}
 
 	elog(DEBUG5, "pxf_fdw: pxfEndForeignScan ends on segment: %d", PXF_SEGMENT_ID);
 }
@@ -815,6 +957,108 @@ InitCopyState(PxfFdwScanState *pxfsstate)
 }
 
 /*
+ * CleanupCurrentFragment
+ *		Safely tears down the churl connection and CopyFromState for the
+ *		current fragment in parallel mode. Handles all NULL cases gracefully.
+ */
+static void
+CleanupCurrentFragment(PxfFdwScanState *pxfsstate)
+{
+	if (pxfsstate == NULL)
+		return;
+
+	if (pxfsstate->churl_handle != NULL)
+	{
+		churl_cleanup(pxfsstate->churl_handle, false);
+		pxfsstate->churl_handle = NULL;
+	}
+
+	if (pxfsstate->churl_headers != NULL)
+	{
+		churl_headers_cleanup(pxfsstate->churl_headers);
+		pxfsstate->churl_headers = NULL;
+	}
+
+	if (pxfsstate->cstate != NULL)
+	{
+		EndCopyFrom(pxfsstate->cstate);
+		pxfsstate->cstate = NULL;
+	}
+
+	pxfsstate->current_fragment = -1;
+}
+
+/*
+ * InitCopyStateForFragment
+ *		Parallel equivalent of InitCopyState(). Opens a connection to PXF
+ *		for a specific fragment and sets up BeginCopyFrom + SREH + rowcontext.
+ */
+static void
+InitCopyStateForFragment(PxfFdwScanState *pxfsstate, int fragmentIndex)
+{
+	CopyFromState	cstate;
+
+	PxfBridgeImportStartFragment(pxfsstate, fragmentIndex);
+
+	/*
+	 * Create CopyState from FDW options.  We always acquire all columns, so
+	 * as to match the expected ScanTupleSlot signature.
+	 */
+	cstate = BeginCopyFrom(
+						   NULL,
+						   pxfsstate->relation,
+						   NULL,
+						   NULL,
+						   false,	/* is_program */
+						   &PxfBridgeRead,	/* data_source_cb */
+						   pxfsstate,	/* data_source_cb_extra */
+						   NIL, /* attnamelist */
+						   pxfsstate->options->copy_options	/* copy options */
+						   );
+
+	if (pxfsstate->options->reject_limit == -1)
+	{
+		/* Default error handling - "all-or-nothing" */
+		cstate->cdbsreh = NULL;
+		cstate->errMode = ALL_OR_NOTHING;
+	}
+	else
+	{
+		/* no error log by default */
+		cstate->errMode = SREH_IGNORE;
+
+		/* select the SREH mode */
+		if (pxfsstate->options->log_errors)
+			cstate->errMode = SREH_LOG;
+
+		cstate->cdbsreh = makeCdbSreh(pxfsstate->options->reject_limit,
+									  pxfsstate->options->is_reject_limit_rows,
+									  pxfsstate->options->resource,
+									  (char *) cstate->cur_relname,
+									  pxfsstate->options->log_errors ? LOG_ERRORS_ENABLE : LOG_ERRORS_DISABLE);
+
+		cstate->cdbsreh->relid = RelationGetRelid(pxfsstate->relation);
+	}
+
+	/* and 'fe_mgbuf' */
+	cstate->fe_msgbuf = makeStringInfo();
+
+	/*
+	 * Create a temporary memory context that we can reset once per row to
+	 * recover palloc'd memory.  This avoids any problems with leaks inside
+	 * datatype input or output routines, and should be faster than retail
+	 * pfree's anyway.
+	 */
+	cstate->rowcontext = AllocSetContextCreate(CurrentMemoryContext,
+											   "PxfFdwMemCxt",
+											   ALLOCSET_DEFAULT_MINSIZE,
+											   ALLOCSET_DEFAULT_INITSIZE,
+											   ALLOCSET_DEFAULT_MAXSIZE);
+
+	pxfsstate->cstate = cstate;
+}
+
+/*
  * Initiates a copy state for pxfBeginForeignModify()
  */
 static void
@@ -952,22 +1196,43 @@ void
 PxfCopyFromErrorCallback(void *arg)
 {
     PxfFdwScanState *pxfsstate = (PxfFdwScanState *) arg;
-	CopyFromState	cstate = pxfsstate->cstate;
+	CopyFromState	cstate;
     char		curlineno_str[32];
+
+    if (pxfsstate == NULL)
+        return;
+
+    /*
+     * Derive relname and resource from pxfsstate fields that are set once
+     * in BeginForeignScan and maintained by the executor — these are always
+     * valid.  We deliberately avoid cstate->cur_relname because cstate
+     * internals can be unreliable when PXF returns error data that corrupts
+     * the COPY parser state.
+     */
+    const char *relname = pxfsstate->relation
+                          ? RelationGetRelationName(pxfsstate->relation)
+                          : "(unknown)";
+    const char *resource = (pxfsstate->options && pxfsstate->options->resource)
+                           ? pxfsstate->options->resource : "(unknown)";
+
+    cstate = pxfsstate->cstate;
+    if (cstate == NULL)
+    {
+        errcontext("Foreign table %s, resource %s", relname, resource);
+        return;
+    }
 
     snprintf(curlineno_str, sizeof(curlineno_str), UINT64_FORMAT,
              cstate->cur_lineno);
 
     if (cstate->opts.binary)
     {
-        /* can't usefully display the data */
-        if (cstate->cur_attname)
-            errcontext("Foreign table %s, record %s of %s, column %s",
-                       cstate->cur_relname, curlineno_str, pxfsstate->options->resource,
-                       cstate->cur_attname);
-        else
-            errcontext("Foreign table %s, record %s of %s",
-                       cstate->cur_relname, curlineno_str, pxfsstate->options->resource);
+        /*
+         * PXF does not support binary format. If we land here, cstate
+         * internals may be unreliable — report only safe information.
+         */
+        errcontext("Foreign table %s, record %s of %s",
+                   relname, curlineno_str, resource);
     }
     else
     {
@@ -978,7 +1243,7 @@ PxfCopyFromErrorCallback(void *arg)
 
             attval = limit_printout_length(cstate->cur_attval);
             errcontext("Foreign table %s, record %s of %s, column %s: \"%s\"",
-                       cstate->cur_relname, curlineno_str, pxfsstate->options->resource,
+                       relname, curlineno_str, resource,
                        cstate->cur_attname, attval);
             pfree(attval);
         }
@@ -986,7 +1251,7 @@ PxfCopyFromErrorCallback(void *arg)
         {
             /* error is relevant to a particular column, value is NULL */
             errcontext("Foreign table %s, record %s of %s, column %s: null input",
-                       cstate->cur_relname, curlineno_str, pxfsstate->options->resource,
+                       relname, curlineno_str, resource,
                        cstate->cur_attname);
         }
         else
@@ -1006,7 +1271,7 @@ PxfCopyFromErrorCallback(void *arg)
                 /* token was found, get the actual message and set it as the main error message */
                 errmsg("%s", token_index + PXF_ERROR_TOKEN_SIZE);
                 errcontext("Foreign table %s, record %s of %s",
-                           cstate->cur_relname, curlineno_str, pxfsstate->options->resource);
+                           relname, curlineno_str, resource);
             }
             /*
              * Error is relevant to a particular line.
@@ -1025,7 +1290,7 @@ PxfCopyFromErrorCallback(void *arg)
                 lineval = limit_printout_length(cstate->line_buf.data);
                 //truncateEolStr(line_buf, cstate->eol_type); <-- this is done in GP6, but not in GP7 ?
                 errcontext("Foreign table %s, record %s of %s: \"%s\"",
-                           cstate->cur_relname, curlineno_str, pxfsstate->options->resource, lineval);
+                           relname, curlineno_str, resource, lineval);
                 pfree(lineval);
             }
             else
@@ -1039,7 +1304,7 @@ PxfCopyFromErrorCallback(void *arg)
                  * and just report the line number.
                  */
                 errcontext("Foreign table %s, record %s of %s",
-                           cstate->cur_relname, curlineno_str, pxfsstate->options->resource);
+                           relname, curlineno_str, resource);
             }
         }
     }
@@ -1130,23 +1395,35 @@ pxfInitializeDSMForeignScan(ForeignScanState *node,
 	 */
 	if (pxfsstate != NULL)
 	{
-		int num_fragments = PxfBridgeFetchFragments(pxfsstate);
-		pstate->total_fragments = num_fragments;
+		int all_fragments = PxfBridgeFetchFragments(pxfsstate);
+		int seg_id = PXF_SEGMENT_ID;
+		int seg_count = PXF_SEGMENT_COUNT;
+
+		/* Count fragments assigned to this segment (round-robin: frag_i → seg_i%count) */
+		int my_fragments = 0;
+		for (int i = 0; i < all_fragments; i++)
+		{
+			if (i % seg_count == seg_id)
+				my_fragments++;
+		}
+
+		pstate->total_fragments = my_fragments;
 		pstate->next_fragment = 0;
-		pstate->finished = false;
+		pstate->finished = (my_fragments == 0);
 
 		/* Store reference to shared state */
 		pxfsstate->pstate = pstate;
 		pxfsstate->is_parallel = true;
 
-		elog(DEBUG3, "pxf_fdw: leader initialized with %d fragments", num_fragments);
+		elog(DEBUG3, "pxf_fdw: leader seg %d initialized with %d/%d fragments",
+			 seg_id, my_fragments, all_fragments);
 	}
 	else
 	{
-		/* No scan state yet, initialize with defaults */
+		/* No scan state — mark finished to prevent workers from spinning */
 		pstate->total_fragments = 0;
 		pstate->next_fragment = 0;
-		pstate->finished = false;
+		pstate->finished = true;
 	}
 }
 
@@ -1219,19 +1496,14 @@ pxfShutdownForeignScan(ForeignScanState *node)
 
 	if (pxfsstate != NULL && pxfsstate->is_parallel)
 	{
-		/* Mark as finished if we're the last one */
+		/* Signal completion in shared state only.
+		 * All resource cleanup belongs in EndForeignScan (called after
+		 * Shutdown), avoiding double-free. */
 		if (pxfsstate->pstate != NULL)
 		{
 			SpinLockAcquire(&pxfsstate->pstate->mutex);
 			pxfsstate->pstate->finished = true;
 			SpinLockRelease(&pxfsstate->pstate->mutex);
-		}
-
-		/* Clean up local fragment data */
-		if (pxfsstate->fragments != NULL)
-		{
-			pfree(pxfsstate->fragments);
-			pxfsstate->fragments = NULL;
 		}
 	}
 }

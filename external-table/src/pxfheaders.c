@@ -26,6 +26,8 @@
 #include "utils/timestamp.h"
 #include "nodes/makefuncs.h"
 #include "cdb/cdbvars.h"
+#include "nodes/nodeFuncs.h"
+#include "utils/guc.h"
 
 /* helper function declarations */
 static void add_alignment_size_httpheader(CHURL_HEADERS headers);
@@ -45,6 +47,7 @@ static List *getTargetList(ProjectionInfo *projInfo);
 static bool needToIterateTargetList(List *targetList, int *varNumbers);
 static Node *getTargetListEntryExpression(ListCell *lc1);
 static int  getNumSimpleVars(ProjectionInfo *projInfo);
+static bool contain_whole_row_var(Node *node, void *context);
 
 /*
  * Add key/value pairs to connection header.
@@ -128,6 +131,20 @@ build_http_headers(PxfInputData *input)
 		bool qualsAreSupported = true;
 		List *qualsAttributes =
 				 extractPxfAttributes(input->quals, &qualsAreSupported);
+		/*
+		 * The scan quals are only handed to PXF when filter pushdown is on. With
+		 * pushdown off, input->quals is empty even if the query has a WHERE clause,
+		 * so the columns it needs are unknown and must not be projected away.
+		 */
+		if (!gp_external_enable_filter_pushdown)
+			qualsAreSupported = false;
+		/*
+		 * A whole-row reference (t::text, row_to_json(t), t IS NULL) has varattno 0
+		 * and needs every column, but it cannot be expressed as projected indices.
+		 */
+		if (contain_whole_row_var((Node *) getTargetList(proj_info), NULL) ||
+			contain_whole_row_var((Node *) input->quals, NULL))
+			qualsAreSupported = false;
 		/* projection information is incomplete if columns from WHERE clause wasn't extracted */
 		/* if any of expressions in WHERE clause is not supported - do not send any projection information at all*/
 		if (qualsAreSupported &&
@@ -762,6 +779,19 @@ add_attnums_from_targetList(Node *node, List *attnums)
 	return expression_tree_walker(node,
 								  add_attnums_from_targetList,
 								  (void *) attnums);
+}
+
+/*
+ * Returns true if the expression tree contains a whole-row Var (varattno 0).
+ */
+static bool
+contain_whole_row_var(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Var))
+		return ((Var *) node)->varattno == InvalidAttrNumber;
+	return expression_tree_walker(node, contain_whole_row_var, context);
 }
 
 /*

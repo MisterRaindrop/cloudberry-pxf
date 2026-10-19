@@ -24,6 +24,8 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hive.serde.serdeConstants;
 import org.apache.cloudberry.pxf.api.utilities.ColumnDescriptor;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_COLUMN_TYPES;
@@ -44,9 +46,7 @@ public class HiveORCSerdeResolver extends HiveResolver {
         Properties properties = super.getSerdeProperties();
         StringBuilder columnNames = new StringBuilder(numberOfDataColumns * 2); // column + delimiter
         StringBuilder columnTypes = new StringBuilder(numberOfDataColumns * 2); // column + delimiter
-        String[] cols = properties.getProperty(META_TABLE_COLUMN_TYPES).split(":");
-        String[] hiveColTypes = new String[cols.length];
-        parseColTypes(cols, hiveColTypes);
+        String[] hiveColTypes = splitColumnTypes(properties.getProperty(META_TABLE_COLUMN_TYPES));
 
         String delim = ",";
         for (int j = 0; j < context.getTupleDescription().size(); j++) {
@@ -72,25 +72,31 @@ public class HiveORCSerdeResolver extends HiveResolver {
         return properties;
     }
 
-    private void parseColTypes(String[] cols, String[] output) {
-        int i = 0;
-        StringBuilder structTypeBuilder = new StringBuilder();
-        boolean inStruct = false;
-        for (String str : cols) {
-            if (str.contains("struct")) {
-                structTypeBuilder = new StringBuilder();
-                inStruct = true;
-                structTypeBuilder.append(str);
-            } else if (inStruct) {
-                structTypeBuilder.append(':');
-                structTypeBuilder.append(str);
-                if (str.contains(">")) {
-                    inStruct = false;
-                    output[i++] = structTypeBuilder.toString();
-                }
-            } else {
-                output[i++] = str;
+    /**
+     * Splits the colon separated list of Hive column types (META_TABLE_COLUMN_TYPES) into
+     * one type per column. Inside struct types a colon also separates a field name from
+     * its type (e.g. "struct<a:array<int>,b:int>"), so only colons outside of angle
+     * brackets separate columns.
+     *
+     * @param columnTypes colon separated column types
+     * @return the type of each column
+     */
+    static String[] splitColumnTypes(String columnTypes) {
+        List<String> types = new ArrayList<>();
+        int depth = 0;
+        int start = 0;
+        for (int i = 0; i < columnTypes.length(); i++) {
+            char c = columnTypes.charAt(i);
+            if (c == '<') {
+                depth++;
+            } else if (c == '>') {
+                depth--;
+            } else if (c == ':' && depth == 0) {
+                types.add(columnTypes.substring(start, i));
+                start = i + 1;
             }
         }
+        types.add(columnTypes.substring(start));
+        return types.toArray(new String[0]);
     }
 }

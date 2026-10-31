@@ -90,15 +90,45 @@ public class ParallelScanTest extends BaseFeature {
         gpdb.createTableAndVerify(exTable);
 
         if (FDWUtils.useFDW) {
+            createPlanFunctions();
             createAppendObjects(protocol, tablePath);
             createOptionPrecedenceObjects(protocol, tablePath);
         }
     }
 
     /**
+     * Plan helpers that return EXPLAIN output as query results:
+     * pxf_parallel_scan_count counts the Parallel Foreign Scan nodes, and
+     * pxf_parallel_plan returns the plan lines with the number of segments
+     * and rows masked. The statements in the sql files must not contain
+     * "EXPLAIN ... SELECT": atmsort.pl replaces the output of such statements
+     * with the output of explain.pl, which is empty when explain.pl is not
+     * installed, so the plans would not be compared at all.
+     */
+    private void createPlanFunctions() throws Exception {
+        gpdb.runQuery("CREATE OR REPLACE FUNCTION pxf_parallel_scan_count(q text) RETURNS int AS $$"
+                + " DECLARE r text; n int := 0;"
+                + " BEGIN"
+                + "   FOR r IN EXECUTE 'EXPLAIN (COSTS OFF) ' || q LOOP"
+                + "     IF r LIKE '%Parallel Foreign Scan%' THEN n := n + 1; END IF;"
+                + "   END LOOP;"
+                + "   RETURN n;"
+                + " END $$ LANGUAGE plpgsql");
+
+        gpdb.runQuery("CREATE OR REPLACE FUNCTION pxf_parallel_plan(opts text, q text) RETURNS SETOF text AS $$"
+                + " DECLARE r text;"
+                + " BEGIN"
+                + "   FOR r IN EXECUTE 'EXPLAIN (' || opts || ') ' || q LOOP"
+                + "     r := regexp_replace(r, 'Gather Motion \\d+:1  \\(slice\\d+; segments: \\d+\\)',"
+                + "                            'Gather Motion N:1  (sliceN; segments: N)');"
+                + "     RETURN NEXT regexp_replace(r, 'actual rows=\\d+ loops=\\d+', 'actual rows=N loops=N');"
+                + "   END LOOP;"
+                + " END $$ LANGUAGE plpgsql");
+    }
+
+    /**
      * Objects for Parallel Append cases: a partitioned table with two foreign
-     * partitions (ids 1-10000 and 10001-14000) and a helper that counts the
-     * Parallel Foreign Scan nodes in a plan.
+     * partitions (ids 1-10000 and 10001-14000).
      */
     private void createAppendObjects(ProtocolEnum protocol, String tablePath) throws Exception {
         String secondDir = hdfs.getWorkingDirectory() + "/parallel_data_2";
@@ -123,15 +153,6 @@ public class ParallelScanTest extends BaseFeature {
         gpdb.runQuery("CREATE FOREIGN TABLE pxf_parallel_partitioned_2 PARTITION OF pxf_parallel_partitioned"
                 + " FOR VALUES FROM (10001) TO (14001)"
                 + serverAndOptions("pxf_parallel_partitioned_2", secondPath, "enable_parallel=true"));
-
-        gpdb.runQuery("CREATE OR REPLACE FUNCTION pxf_parallel_scan_count(q text) RETURNS int AS $$"
-                + " DECLARE r text; n int := 0;"
-                + " BEGIN"
-                + "   FOR r IN EXECUTE 'EXPLAIN (COSTS OFF) ' || q LOOP"
-                + "     IF r LIKE '%Parallel Foreign Scan%' THEN n := n + 1; END IF;"
-                + "   END LOOP;"
-                + "   RETURN n;"
-                + " END $$ LANGUAGE plpgsql");
     }
 
     /**
@@ -183,6 +204,7 @@ public class ParallelScanTest extends BaseFeature {
 
     @Test(groups = {"features", "gpdb", "fdw"})
     public void testParallelExplain() throws Exception {
+        skipIfNotFDW();
         runSqlTest("features/parallel/explain");
     }
 

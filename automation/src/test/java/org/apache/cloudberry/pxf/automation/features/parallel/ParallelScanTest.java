@@ -19,6 +19,7 @@ import org.testng.annotations.Test;
  * - EXPLAIN: Parallel Foreign Scan present when parallel enabled, absent when disabled
  * - Parallel Append: UNION ALL and partitioned tables return every row
  * - Option precedence: table-level enable_parallel overrides the server level
+ * - Reject limit: a table with a segment reject limit is not scanned in parallel
  */
 @WorksWithFDW
 public class ParallelScanTest extends BaseFeature {
@@ -28,6 +29,8 @@ public class ParallelScanTest extends BaseFeature {
     private static final int ROWS_PER_FILE = 1000;
     private static final int SINGLE_FRAG_ROWS = 100;
     private static final int SECOND_PART_FILES = 4;
+    private static final int BAD_ROW_FILES = 12;
+    private static final int BAD_FILE_ROWS = 100;
 
     private String hdfsDir;
     private String singleFragDir;
@@ -93,6 +96,7 @@ public class ParallelScanTest extends BaseFeature {
             createPlanFunctions();
             createAppendObjects(protocol, tablePath);
             createOptionPrecedenceObjects(protocol, tablePath);
+            createRejectLimitObjects(protocol);
         }
     }
 
@@ -171,6 +175,37 @@ public class ParallelScanTest extends BaseFeature {
                 "enable_parallel=true");
     }
 
+    /**
+     * Objects for the reject limit cases: 12 files of 100 rows, each with one
+     * malformed row, read through tables with a segment reject limit of 3
+     * rows, which up to 3 segments exceed, and of 20 rows, which no segment
+     * can exceed.
+     */
+    private void createRejectLimitObjects(ProtocolEnum protocol) throws Exception {
+        String badDir = hdfs.getWorkingDirectory() + "/parallel_bad_rows";
+        hdfs.createDirectory(badDir);
+        for (int fileIdx = 0; fileIdx < BAD_ROW_FILES; fileIdx++) {
+            Table dataTable = new Table("bad_" + fileIdx, null);
+            int startId = fileIdx * BAD_FILE_ROWS + 1;
+            for (int id = startId; id < startId + BAD_FILE_ROWS; id++) {
+                dataTable.addRow(new String[]{String.valueOf(id), "row_" + id});
+            }
+            dataTable.addRow(new String[]{"bad", "row"});
+            hdfs.writeTableToFile(badDir + "/part_" + String.format("%02d", fileIdx) + ".csv", dataTable, ",");
+        }
+        String badPath = protocol.getExternalTablePath(hdfs.getBasePath(), badDir);
+
+        for (int limit : new int[]{3, 20}) {
+            exTable = TableFactory.getPxfReadableCSVTable("pxf_parallel_reject_" + limit,
+                    FIELDS, badPath, ",");
+            exTable.setHost(pxfHost);
+            exTable.setPort(pxfPort);
+            exTable.setUserParameters(new String[]{"enable_parallel=true"});
+            exTable.setSegmentRejectLimitAndType(limit, "ROWS");
+            gpdb.createTableAndVerify(exTable);
+        }
+    }
+
     private void createServer(String name, String fdw, String enableParallel) throws Exception {
         gpdb.runQuery("DROP SERVER IF EXISTS " + name + " CASCADE", true, false);
         gpdb.runQuery(String.format("CREATE SERVER %s FOREIGN DATA WRAPPER %s"
@@ -234,6 +269,16 @@ public class ParallelScanTest extends BaseFeature {
     public void testParallelOptionPrecedence() throws Exception {
         skipIfNotFDW();
         runSqlTest("features/parallel/option_precedence");
+    }
+
+    /**
+     * The segment reject limit is counted per process, so a table with a
+     * reject limit must not be scanned by several gang workers per segment.
+     */
+    @Test(groups = {"features", "gpdb", "fdw"})
+    public void testParallelRejectLimit() throws Exception {
+        skipIfNotFDW();
+        runSqlTest("features/parallel/reject_limit");
     }
 
     private void skipIfNotFDW() {

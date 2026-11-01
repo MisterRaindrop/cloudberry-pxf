@@ -4,10 +4,10 @@
 -- m/ERROR:\s*(S|s)egment reject limit reached/
 -- s/ERROR:\s*(S|s)egment reject limit reached.*/ERROR: segment reject limit reached/
 --
--- m/DETAIL:\s*Last error was/
--- s/DETAIL:.*/GP_IGNORE:/
+-- m/CONTEXT:\s*Last error was/
+-- s/CONTEXT:.*/GP_IGNORE:/
 --
--- m/CONTEXT:\s*Foreign table/
+-- m/CONTEXT:\s*External table/
 -- s/CONTEXT:.*/GP_IGNORE:/
 --
 -- end_matchsubs
